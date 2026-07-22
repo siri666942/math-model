@@ -136,6 +136,99 @@ def check_occlusion(missile_pos, smoke_pos, target_keypoints):
     return True
 
 
+def _check_occlusion_batch(M_pos, smoke_pos, target_keypoints, chunk_size=None):
+    """
+    向量化遮蔽判据：对一批 (missile_pos, smoke_pos) 时刻一次性判断是否遮蔽
+
+    Parameters:
+        M_pos: (T,3) 导弹位置序列
+        smoke_pos: (T,3) 云团位置序列（与M_pos一一对应同一时刻）
+        target_keypoints: (K,3) 目标关键点集
+
+    Returns:
+        (T,) 布尔数组
+    """
+    T = M_pos.shape[0]
+    K = target_keypoints.shape[0]
+    if chunk_size is None:
+        # 控制单个chunk的临时数组规模（T_chunk*K*3），避免内存爆炸
+        chunk_size = max(1, int(2e7 / max(K * 3, 1)))
+
+    result = np.empty(T, dtype=bool)
+    for start in range(0, T, chunk_size):
+        end = min(start + chunk_size, T)
+        m = M_pos[start:end]
+        s = smoke_pos[start:end]
+
+        vec_ms = s - m
+        dist_ms = np.linalg.norm(vec_ms, axis=1)
+        inside_cloud = dist_ms < EFFECTIVE_RADIUS
+
+        dist_mt = np.linalg.norm(m - TARGET_CENTER, axis=1)
+        dist_st = np.linalg.norm(s - TARGET_CENTER, axis=1)
+        blocked = dist_mt <= dist_st
+
+        dist_ms_safe = np.maximum(dist_ms, 1e-9)
+        sin_alpha = np.clip(EFFECTIVE_RADIUS / dist_ms_safe, 0.0, 1.0)
+        full_cover = sin_alpha >= 1.0
+        cos_alpha = np.sqrt(np.maximum(1.0 - sin_alpha ** 2, 0.0))
+
+        tar_axis = target_keypoints[None, :, :] - m[:, None, :]           # (t,K,3)
+        dot = np.einsum('ti,tki->tk', vec_ms, tar_axis)
+        norm_tar = np.linalg.norm(tar_axis, axis=2)
+        denom = dist_ms[:, None] * norm_tar
+        denom_safe = np.where(denom < 1e-12, np.inf, denom)
+        cos_gamma = dot / denom_safe
+        all_in_cone = np.all(cos_alpha[:, None] <= cos_gamma, axis=1)
+
+        cone_ok = full_cover | all_in_cone
+        result[start:end] = inside_cloud | (~blocked & cone_ok)
+
+    return result
+
+
+def _bomb_coverage_mask(drone_init, theta, speed, release_time, detonation_delay,
+                        missile_idx, target_keypoints, dt, t_total):
+    """
+    计算单枚烟幕弹在全局时间网格 arange(0, t_total, dt) 上、独自能否遮蔽指定导弹的布尔掩码
+
+    使用云团/导弹位置的解析式（而非逐步累加），只在起爆~失效窗口内做向量化判据计算，
+    是 0.1/0.2 模块的核心：把"全部关键点 × 该时刻"一次性算成矩阵运算，避免逐时刻/逐点的Python循环。
+    """
+    n_steps = int(np.ceil(t_total / dt))
+    mask = np.zeros(n_steps, dtype=bool)
+
+    detonation_time = release_time + detonation_delay
+    smoke_expire_time = detonation_time + EFFECTIVE_DURATION
+    t_start = max(0.0, detonation_time)
+    t_end = min(t_total, smoke_expire_time)
+    if t_end <= t_start:
+        return mask
+
+    i_start = int(np.ceil(t_start / dt))
+    i_end = min(n_steps, int(np.floor((t_end + 1e-9) / dt)) + 1)
+    if i_end <= i_start:
+        return mask
+
+    ts = (i_start + np.arange(i_end - i_start)) * dt
+
+    direction = np.array([np.cos(theta), np.sin(theta), 0.0])
+    FY_at_release = drone_init + speed * direction * release_time
+    bomb_x = FY_at_release[0] + speed * direction[0] * detonation_delay
+    bomb_y = FY_at_release[1] + speed * direction[1] * detonation_delay
+    bomb_h = FY_at_release[2] - 0.5 * G * detonation_delay ** 2
+
+    smoke_pos = np.empty((len(ts), 3))
+    smoke_pos[:, 0] = bomb_x
+    smoke_pos[:, 1] = bomb_y
+    smoke_pos[:, 2] = bomb_h - SMOKE_SINK_SPEED * (ts - detonation_time)
+
+    M_pos = MISSILES_INIT[missile_idx] + MISSILE_SPEED * MISSILES_DIR[missile_idx] * ts[:, None]
+
+    mask[i_start:i_end] = _check_occlusion_batch(M_pos, smoke_pos, target_keypoints)
+    return mask
+
+
 def simulate_single_bomb(drone_init, theta, speed, release_time, detonation_delay,
                          missile_idx=0, target_keypoints=None, dt=DT, t_total=T_TOTAL):
     """
@@ -155,48 +248,9 @@ def simulate_single_bomb(drone_init, theta, speed, release_time, detonation_dela
     if target_keypoints is None:
         target_keypoints = get_target_keypoints()
 
-    total_effective_time = 0.0
-    smoke_pos = np.zeros(3)
-    bomb_detonated = False
-    bomb_h = 0.0  # 起爆时的高度（用于固定云团xy位置）
-    detonation_time = release_time + detonation_delay
-    smoke_expire_time = detonation_time + EFFECTIVE_DURATION
-
-    for t in np.arange(0, t_total, dt):
-        M_pos = missile_position(t, missile_idx)
-        FY_pos = drone_position(t, drone_init, theta, speed)
-
-        if t < release_time:
-            # 尚未投放
-            continue
-
-        if t < detonation_time:
-            # 平抛运动阶段
-            delta_t = t - release_time
-            vertical_dist = -0.5 * G * delta_t ** 2
-            smoke_pos = np.array([FY_pos[0], FY_pos[1], FY_pos[2] + vertical_dist])
-        else:
-            # 爆炸后云团下沉
-            if not bomb_detonated:
-                bomb_detonated = True
-                # 计算起爆时刻的位置
-                FY_at_release = drone_position(release_time, drone_init, theta, speed)
-                FY_at_detonation_x = FY_at_release[0] + speed * np.cos(theta) * detonation_delay
-                FY_at_detonation_y = FY_at_release[1] + speed * np.sin(theta) * detonation_delay
-                bomb_h = FY_at_release[2] - 0.5 * G * detonation_delay ** 2
-                smoke_pos[0] = FY_at_detonation_x
-                smoke_pos[1] = FY_at_detonation_y
-                smoke_pos[2] = bomb_h
-
-            # 云团下沉
-            smoke_pos[2] -= SMOKE_SINK_SPEED * dt
-
-            # 检查是否在有效期内
-            if t <= smoke_expire_time:
-                if check_occlusion(M_pos, smoke_pos, target_keypoints):
-                    total_effective_time += dt
-
-    return total_effective_time
+    mask = _bomb_coverage_mask(drone_init, theta, speed, release_time, detonation_delay,
+                               missile_idx, target_keypoints, dt, t_total)
+    return mask.sum() * dt
 
 
 def simulate_multi_bomb_single_drone(drone_init, theta, speed, release_times, detonation_delays,
@@ -213,56 +267,20 @@ def simulate_multi_bomb_single_drone(drone_init, theta, speed, release_times, de
         missile_indices: 每枚弹对应的目标导弹索引 [n_bombs]
 
     Returns:
-        total_effective_time: 总有效遮蔽时长
+        total_effective_time: 总有效遮蔽时长（多枚弹的遮蔽区间取并集）
     """
     if target_keypoints is None:
         target_keypoints = get_target_keypoints()
 
-    n_bombs = len(release_times)
-    total_effective_time = 0.0
+    n_steps = int(np.ceil(t_total / dt))
+    any_covered = np.zeros(n_steps, dtype=bool)
 
-    # 每枚弹的状态
-    smoke_pos = np.zeros((n_bombs, 3))
-    bomb_detonated = np.zeros(n_bombs, dtype=bool)
-    bomb_h = np.zeros(n_bombs)
-    detonation_times = release_times + detonation_delays
-    smoke_expire_times = detonation_times + EFFECTIVE_DURATION
+    for i in range(len(release_times)):
+        mask = _bomb_coverage_mask(drone_init, theta, speed, release_times[i], detonation_delays[i],
+                                   missile_indices[i], target_keypoints, dt, t_total)
+        any_covered |= mask
 
-    for t in np.arange(0, t_total, dt):
-        FY_pos = drone_position(t, drone_init, theta, speed)
-
-        is_effective_any = False
-
-        for i in range(n_bombs):
-            if t < release_times[i]:
-                continue
-
-            if t < detonation_times[i]:
-                # 平抛运动
-                delta_t = t - release_times[i]
-                vertical_dist = -0.5 * G * delta_t ** 2
-                smoke_pos[i] = np.array([FY_pos[0], FY_pos[1], FY_pos[2] + vertical_dist])
-            else:
-                # 云团下沉
-                if not bomb_detonated[i]:
-                    bomb_detonated[i] = True
-                    FY_at_release = drone_position(release_times[i], drone_init, theta, speed)
-                    bomb_h[i] = FY_at_release[2] - 0.5 * G * detonation_delays[i] ** 2
-                    smoke_pos[i, 0] = FY_at_release[0] + speed * np.cos(theta) * detonation_delays[i]
-                    smoke_pos[i, 1] = FY_at_release[1] + speed * np.sin(theta) * detonation_delays[i]
-                    smoke_pos[i, 2] = bomb_h[i]
-
-                smoke_pos[i, 2] -= SMOKE_SINK_SPEED * dt
-
-                if t <= smoke_expire_times[i]:
-                    M_pos = missile_position(t, missile_indices[i])
-                    if check_occlusion(M_pos, smoke_pos[i], target_keypoints):
-                        is_effective_any = True
-
-        if is_effective_any:
-            total_effective_time += dt
-
-    return total_effective_time
+    return any_covered.sum() * dt
 
 
 def simulate_multi_drone_multi_bomb(drone_params_list, dt=DT, t_total=T_TOTAL):
@@ -281,75 +299,25 @@ def simulate_multi_drone_multi_bomb(drone_params_list, dt=DT, t_total=T_TOTAL):
             }, ...]
 
     Returns:
-        total_effective_time: 总有效遮蔽时长（每个导弹独立计时，取并集）
+        total_effective_time: 总有效遮蔽时长（同一导弹的多个云团取并集，再对三枚导弹求和）
         per_missile_time: 每枚导弹的遮蔽时长
     """
     target_keypoints = get_target_keypoints(n_circle=360, n_layers=10)
 
-    n_drones = len(drone_params_list)
+    n_steps = int(np.ceil(t_total / dt))
     n_missiles = 3
+    per_missile_mask = [np.zeros(n_steps, dtype=bool) for _ in range(n_missiles)]
 
-    # 初始化状态
-    n_bombs_per_drone = [len(p['release_times']) for p in drone_params_list]
-    smoke_pos = []  # 存储为 list of arrays
-    bomb_detonated = []
-    bomb_h = []
-    detonation_times = []
-    smoke_expire_times = []
+    for p in drone_params_list:
+        n_bombs = len(p['release_times'])
+        for i in range(n_bombs):
+            k = p['missile_indices'][i]
+            mask = _bomb_coverage_mask(p['drone_init'], p['theta'], p['speed'],
+                                       p['release_times'][i], p['detonation_delays'][i],
+                                       k, target_keypoints, dt, t_total)
+            per_missile_mask[k] |= mask
 
-    for drone_idx in range(n_drones):
-        p = drone_params_list[drone_idx]
-        nb = n_bombs_per_drone[drone_idx]
-        smoke_pos.append(np.zeros((nb, 3)))
-        bomb_detonated.append(np.zeros(nb, dtype=bool))
-        bomb_h.append(np.zeros(nb))
-        detonation_times.append(p['release_times'] + p['detonation_delays'])
-        smoke_expire_times.append(detonation_times[-1] + EFFECTIVE_DURATION)
-
-    total_effective_time = 0.0
-    per_missile_time = np.zeros(n_missiles)
-
-    for t in np.arange(0, t_total, dt):
-        M_pos = missile_positions(t, n_missiles)
-
-        # 对每枚导弹，检查是否有任何烟幕弹遮蔽它
-        missile_covered = np.zeros(n_missiles, dtype=bool)
-
-        for drone_idx in range(n_drones):
-            p = drone_params_list[drone_idx]
-            FY_pos = drone_position(t, p['drone_init'], p['theta'], p['speed'])
-            nb = n_bombs_per_drone[drone_idx]
-
-            for i in range(nb):
-                if t < p['release_times'][i]:
-                    continue
-
-                if t < detonation_times[drone_idx][i]:
-                    # 平抛运动
-                    delta_t = t - p['release_times'][i]
-                    vertical_dist = -0.5 * G * delta_t ** 2
-                    smoke_pos[drone_idx][i] = np.array([FY_pos[0], FY_pos[1], FY_pos[2] + vertical_dist])
-                else:
-                    # 云团下沉
-                    if not bomb_detonated[drone_idx][i]:
-                        bomb_detonated[drone_idx][i] = True
-                        FY_at_release = drone_position(p['release_times'][i], p['drone_init'], p['theta'], p['speed'])
-                        bomb_h[drone_idx][i] = FY_at_release[2] - 0.5 * G * p['detonation_delays'][i] ** 2
-                        smoke_pos[drone_idx][i, 0] = FY_at_release[0] + p['speed'] * np.cos(p['theta']) * p['detonation_delays'][i]
-                        smoke_pos[drone_idx][i, 1] = FY_at_release[1] + p['speed'] * np.sin(p['theta']) * p['detonation_delays'][i]
-                        smoke_pos[drone_idx][i, 2] = bomb_h[drone_idx][i]
-
-                    smoke_pos[drone_idx][i, 2] -= SMOKE_SINK_SPEED * dt
-
-                    if t <= smoke_expire_times[drone_idx][i]:
-                        k = p['missile_indices'][i]
-                        if not missile_covered[k]:
-                            if check_occlusion(M_pos[k], smoke_pos[drone_idx][i], target_keypoints):
-                                missile_covered[k] = True
-
-        for k in range(n_missiles):
-            if missile_covered[k]:
-                total_effective_time += dt
-                per_missile_time[k] += dt
+    per_missile_time = np.array([m.sum() * dt for m in per_missile_mask])
+    total_effective_time = per_missile_time.sum()
 
     return total_effective_time, per_missile_time

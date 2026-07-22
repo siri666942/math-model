@@ -7,6 +7,7 @@
 import numpy as np
 from config import (
     DRONES_INIT, DRONE_SPEED_MIN, DRONE_SPEED_MAX, DT, T_TOTAL,
+    PSO_SWARM_SIZE, PSO_MAX_ITER,
 )
 from simulation import simulate_single_bomb, get_target_keypoints
 from pso import PSO
