@@ -27,6 +27,63 @@ N_BOMBS_PER_DRONE = 3
 N_MISSILES = 3
 
 
+class SingleDroneObjective:
+    """阶段1: 单机独立优化用的目标函数对象，模块级可pickle，供PSO多进程worker调用"""
+
+    def __init__(self, drone_idx, missile_order):
+        self.drone_idx = drone_idx
+        self.missile_order = missile_order
+
+    def __call__(self, x):
+        theta, speed = x[0], x[1]
+        release_times = np.array([x[2], x[2] + x[3], x[2] + x[3] + x[4]])
+        delays = np.array([x[5], x[6], x[7]])
+
+        drone_params = [{
+            'drone_init': DRONES_INIT[self.drone_idx],
+            'theta': theta,
+            'speed': speed,
+            'release_times': release_times,
+            'detonation_delays': delays,
+            'missile_indices': self.missile_order,
+        }]
+        total_time, _ = simulate_multi_drone_multi_bomb(
+            drone_params, dt=DT, t_total=T_TOTAL
+        )
+        return total_time
+
+
+def _joint_objective(x):
+    """阶段2: 40维联合微调用的目标函数，不捕获任何局部变量，模块级可pickle"""
+    idx = 0
+    drone_params = []
+    for drone_idx in range(N_DRONES):
+        theta = x[idx]; idx += 1
+        speed = x[idx]; idx += 1
+
+        release1 = x[idx]; idx += 1
+        int2 = x[idx]; idx += 1
+        int3 = x[idx]; idx += 1
+        release_times = np.array([release1, release1 + int2, release1 + int2 + int3])
+
+        delays = np.array([x[idx + j] for j in range(3)]); idx += 3
+        order = INTERCEPT_ORDER[['FY1', 'FY2', 'FY3', 'FY4', 'FY5'][drone_idx]]
+
+        drone_params.append({
+            'drone_init': DRONES_INIT[drone_idx],
+            'theta': theta,
+            'speed': speed,
+            'release_times': release_times,
+            'detonation_delays': delays,
+            'missile_indices': order,
+        })
+
+    total_time, _ = simulate_multi_drone_multi_bomb(
+        drone_params, dt=DT, t_total=T_TOTAL
+    )
+    return total_time
+
+
 def solve_problem5():
     """求解问题5: 五机多弹多导弹协同策略"""
     print("=" * 60)
@@ -35,33 +92,35 @@ def solve_problem5():
 
     # 预定义每架无人机的最佳搜索范围
     # 基于初始位置分析
+    # theta_range 以各无人机指向真目标(0,200,0)的方位角为中心留出搜索余量
+    # (原范围都取在0°附近的小角度，方向朝向战场正前方而非目标，PSO永远搜不到有效遮蔽)
     drone_configs = [
-        {  # FY1: 在y=0上，适合拦截M1
-            'theta_range': (np.pi * 0.3, np.pi * 0.5),
+        {  # FY1: 目标方位约179.4°(3.13rad)
+            'theta_range': (2.73, 3.53),
             'speed_range': (DRONE_SPEED_MIN, DRONE_SPEED_MAX),
             'release_range': (0.0, 5.0),
             'delay_range': (0.0, 8.0),
         },
-        {  # FY2: y>0，M2也在y>0，适合拦截M2
-            'theta_range': (np.pi * 0.2, np.pi * 0.5),
+        {  # FY2: 目标方位约-174.3°(-3.04rad)
+            'theta_range': (-3.44, -2.64),
             'speed_range': (DRONE_SPEED_MIN, DRONE_SPEED_MAX),
             'release_range': (0.0, 8.0),
             'delay_range': (0.0, 10.0),
         },
-        {  # FY3: y<0，M3也在y<0，适合拦截M3
-            'theta_range': (-np.pi * 0.3, -np.pi * 0.05),
+        {  # FY3: 目标方位约151.9°(2.65rad)
+            'theta_range': (2.25, 3.05),
             'speed_range': (DRONE_SPEED_MIN, DRONE_SPEED_MAX),
             'release_range': (0.0, 12.0),
             'delay_range': (0.0, 12.0),
         },
-        {  # FY4: y>0，较大的y偏移
-            'theta_range': (0.0, np.pi * 0.4),
+        {  # FY4: 目标方位约-170.7°(-2.98rad)
+            'theta_range': (-3.38, -2.58),
             'speed_range': (DRONE_SPEED_MIN, DRONE_SPEED_MAX),
             'release_range': (0.0, 15.0),
             'delay_range': (0.0, 15.0),
         },
-        {  # FY5: y<0
-            'theta_range': (-np.pi * 0.3, 0.0),
+        {  # FY5: 目标方位约170.4°(2.97rad)
+            'theta_range': (2.57, 3.37),
             'speed_range': (DRONE_SPEED_MIN, DRONE_SPEED_MAX),
             'release_range': (0.0, 15.0),
             'delay_range': (0.0, 15.0),
@@ -92,27 +151,7 @@ def solve_problem5():
 
         intercept_order = INTERCEPT_ORDER[['FY1','FY2','FY3','FY4','FY5'][drone_idx]]
 
-        def make_obj(d_idx, order):
-            def obj(x):
-                theta, speed = x[0], x[1]
-                release_times = np.array([x[2], x[2]+x[3], x[2]+x[3]+x[4]])
-                delays = np.array([x[5], x[6], x[7]])
-
-                drone_params = [{
-                    'drone_init': DRONES_INIT[d_idx],
-                    'theta': theta,
-                    'speed': speed,
-                    'release_times': release_times,
-                    'detonation_delays': delays,
-                    'missile_indices': order,
-                }]
-                total_time, _ = simulate_multi_drone_multi_bomb(
-                    drone_params, dt=DT, t_total=T_TOTAL
-                )
-                return total_time
-            return obj
-
-        obj_func = make_obj(drone_idx, intercept_order)
+        obj_func = SingleDroneObjective(drone_idx, intercept_order)
         pso = PSO(obj_func, bounds, n_particles=150, max_iter=80,
                   maximize=True, verbose=False)
         x_opt, f_opt = pso.optimize()
@@ -193,37 +232,8 @@ def solve_problem5():
                 min(cfg['delay_range'][1], d_center + delta)
             ))
 
-    def objective_joint(x):
-        idx = 0
-        drone_params = []
-        for drone_idx in range(N_DRONES):
-            theta = x[idx]; idx += 1
-            speed = x[idx]; idx += 1
-
-            release1 = x[idx]; idx += 1
-            int2 = x[idx]; idx += 1
-            int3 = x[idx]; idx += 1
-            release_times = np.array([release1, release1+int2, release1+int2+int3])
-
-            delays = np.array([x[idx+j] for j in range(3)]); idx += 3
-            order = INTERCEPT_ORDER[['FY1','FY2','FY3','FY4','FY5'][drone_idx]]
-
-            drone_params.append({
-                'drone_init': DRONES_INIT[drone_idx],
-                'theta': theta,
-                'speed': speed,
-                'release_times': release_times,
-                'detonation_delays': delays,
-                'missile_indices': order,
-            })
-
-        total_time, _ = simulate_multi_drone_multi_bomb(
-            drone_params, dt=DT, t_total=T_TOTAL
-        )
-        return total_time
-
     print(f"联合优化变量维度: {len(bounds_joint)}")
-    pso_joint = PSO(objective_joint, bounds_joint, n_particles=PSO_SWARM_P5,
+    pso_joint = PSO(_joint_objective, bounds_joint, n_particles=PSO_SWARM_P5,
                     max_iter=PSO_ITER_P5, maximize=True, verbose=True)
     x_opt_joint, f_opt_joint = pso_joint.optimize()
 

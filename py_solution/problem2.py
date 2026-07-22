@@ -13,6 +13,21 @@ from simulation import simulate_single_bomb, get_target_keypoints
 from pso import PSO
 
 
+class Problem2Objective:
+    """模块级可pickle的目标函数对象，供PSO多进程worker调用"""
+
+    def __init__(self, drone_init, target_keypoints):
+        self.drone_init = drone_init
+        self.target_keypoints = target_keypoints
+
+    def __call__(self, x):
+        theta, speed, release_time, detonation_delay = x
+        return simulate_single_bomb(
+            self.drone_init, theta, speed, release_time, detonation_delay,
+            missile_idx=0, target_keypoints=self.target_keypoints, dt=DT, t_total=T_TOTAL
+        )
+
+
 def solve_problem2():
     """求解问题2: 单机单弹最优策略"""
     print("=" * 60)
@@ -23,19 +38,16 @@ def solve_problem2():
     target_keypoints = get_target_keypoints(360, 0)  # 上下底面720点
 
     # 决策变量: [theta, speed, release_time, detonation_delay]
+    # theta以FY1指向真目标(0,200,0)的方位角(约179.4°/3.13rad)为中心留出搜索余量，
+    # 原范围(45°~90°)方向朝向战场正前方而非目标，导致PSO永远搜不到任何有效遮蔽
     bounds = [
-        (np.pi * 0.25, np.pi * 0.5),   # theta (rad) - 朝向原点方向
+        (2.73, 3.53),   # theta (rad) - 朝向真目标方向附近
         (DRONE_SPEED_MIN, DRONE_SPEED_MAX),  # speed (m/s)
         (0.0, 15.0),                    # release_time (s)
         (0.0, 6.0),                     # detonation_delay (s)
     ]
 
-    def objective(x):
-        theta, speed, release_time, detonation_delay = x
-        return simulate_single_bomb(
-            drone_init, theta, speed, release_time, detonation_delay,
-            missile_idx=0, target_keypoints=target_keypoints, dt=DT, t_total=T_TOTAL
-        )
+    objective = Problem2Objective(drone_init, target_keypoints)
 
     print(f"\n变量范围:")
     print(f"  theta: [{bounds[0][0]:.2f}, {bounds[0][1]:.2f}] rad")

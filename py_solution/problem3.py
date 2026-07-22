@@ -13,10 +13,39 @@ from config import (
 )
 from simulation import simulate_multi_bomb_single_drone, get_target_keypoints
 from pso import PSO
+from problem2 import Problem2Objective
 
 # 为 problem3 使用独立的 PSO 参数
 PSO_SWARM_SIZE_P3 = 300
 PSO_MAX_ITER_P3 = 150
+
+# 阶段0(热启动预搜)的PSO参数，问题规模小(单弹4维)，预算给小一些即可
+PSO_SWARM_SIZE_P3_SEED = 100
+PSO_MAX_ITER_P3_SEED = 40
+
+
+class Problem3Objective:
+    """模块级可pickle的目标函数对象，供PSO多进程worker调用"""
+
+    def __init__(self, drone_init, target_keypoints):
+        self.drone_init = drone_init
+        self.target_keypoints = target_keypoints
+
+    def __call__(self, x):
+        theta = x[0]
+        speed = x[1]
+        release_times = np.array([
+            x[2],
+            x[2] + x[3],
+            x[2] + x[3] + x[4],
+        ])
+        detonation_delays = np.array([x[5], x[6], x[7]])
+        missile_indices = np.array([0, 0, 0])  # 全部针对M1
+
+        return simulate_multi_bomb_single_drone(
+            self.drone_init, theta, speed, release_times, detonation_delays,
+            missile_indices, target_keypoints=self.target_keypoints, dt=DT, t_total=T_TOTAL
+        )
 
 
 def solve_problem3():
@@ -33,7 +62,7 @@ def solve_problem3():
     # x[2] = release1, x[3] = interval_to_2nd, x[4] = interval_to_3rd
     # x[5] = delay1, x[6] = delay2, x[7] = delay3
     bounds = [
-        (np.pi * 0.3, np.pi * 0.5),     # theta
+        (2.73, 3.53),     # theta (rad) - 朝向真目标方向附近(原范围方向错误，见problem2.py)
         (DRONE_SPEED_MIN, DRONE_SPEED_MAX),  # speed
         (0.0, 5.0),                      # release1
         (BOMB_INTERVAL_MIN, 4.0),        # interval 1->2
@@ -43,27 +72,36 @@ def solve_problem3():
         (0.0, 6.0),                      # delay3
     ]
 
-    def objective(x):
-        theta = x[0]
-        speed = x[1]
-        release_times = np.array([
-            x[2],
-            x[2] + x[3],
-            x[2] + x[3] + x[4],
-        ])
-        detonation_delays = np.array([x[5], x[6], x[7]])
-        missile_indices = np.array([0, 0, 0])  # 全部针对M1
+    # ============================================================
+    # 阶段0: 用问题2同款的单弹目标函数快速预搜一个"够用"的起点，
+    # 给下面8维PSO当热启动种子——对应国奖论文里"贪心算法找可接受解，
+    # PSO在其附近精修"的思路，而不是让PSO从纯随机初始化的8维空间里摸索。
+    # ============================================================
+    print("\n阶段0: 单弹快速预搜(为8维PSO提供热启动起点)...")
+    seed_kp = get_target_keypoints(360, 0)  # 用问题2同档精度(无侧面点)，预搜更快
+    seed_obj = Problem2Objective(drone_init, seed_kp)
+    seed_bounds = [bounds[0], bounds[1], (0.0, 5.0), (0.0, 6.0)]
+    seed_pso = PSO(seed_obj, seed_bounds, n_particles=PSO_SWARM_SIZE_P3_SEED,
+                   max_iter=PSO_MAX_ITER_P3_SEED, maximize=True, verbose=False)
+    seed_x, seed_f = seed_pso.optimize()
+    print(f"  预搜起点: θ={np.degrees(seed_x[0]):.1f}° v={seed_x[1]:.1f}m/s "
+          f"release={seed_x[2]:.2f}s delay={seed_x[3]:.2f}s (单弹遮蔽{seed_f:.4f}s)")
 
-        return simulate_multi_bomb_single_drone(
-            drone_init, theta, speed, release_times, detonation_delays,
-            missile_indices, target_keypoints=target_keypoints, dt=DT, t_total=T_TOTAL
-        )
+    # 用这个单弹解构造8维种子: 三发弹依次按最小间隔错开投放，起爆延时先沿用预搜结果，
+    # 后续PSO会在这个起点附近继续搜索(种子只替换初始种群里的一个粒子，不锁死解)
+    seed_positions = [
+        [seed_x[0], seed_x[1], seed_x[2], BOMB_INTERVAL_MIN, BOMB_INTERVAL_MIN,
+         seed_x[3], seed_x[3], seed_x[3]],
+    ]
+
+    objective = Problem3Objective(drone_init, target_keypoints)
 
     print(f"\n变量维度: 8 (theta, speed, 3×release, 3×delay)")
     print(f"粒子群规模: {PSO_SWARM_SIZE_P3}, 迭代次数: {PSO_MAX_ITER_P3}")
 
     pso = PSO(objective, bounds, n_particles=PSO_SWARM_SIZE_P3,
-              max_iter=PSO_MAX_ITER_P3, maximize=True, verbose=True)
+              max_iter=PSO_MAX_ITER_P3, maximize=True, verbose=True,
+              seed_positions=seed_positions)
     x_opt, f_opt = pso.optimize()
 
     # 解析结果

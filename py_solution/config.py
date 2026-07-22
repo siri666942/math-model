@@ -95,7 +95,7 @@ PSO_C2 = 1.5             # 社会学习因子
 # 问题2 变量范围
 # ============================================================
 P2_BOUNDS = {
-    'theta': (np.pi * 0.25, np.pi * 0.5),  # 航向角 (rad)
+    'theta': (2.73, 3.53),  # 航向角 (rad) - FY1指向真目标方位角(约3.13rad)附近
     'speed': (DRONE_SPEED_MIN, DRONE_SPEED_MAX),
     'release_time': (0.0, 15.0),
     'detonation_delay': (0.0, 6.0),

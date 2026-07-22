@@ -1,0 +1,9 @@
+name: mathmodel
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy=2.4.6
+  - scipy=1.17.1
+  - openpyxl=3.1.5
+  - matplotlib=3.11.0

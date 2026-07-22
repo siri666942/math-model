@@ -5,6 +5,18 @@
 优化变量(12维):
 [theta1, theta2, theta3, speed1, speed2, speed3,
  release1, release2, release3, delay1, delay2, delay3]
+
+求解策略参考了2025年国奖论文(cumcm25003等)的"3-1-1拆解+边界收缩"思路：
+一次性对12维做冷启动全空间PSO代价太大(实测单次评估约0.9s，500粒子x300代要接近
+40小时)，容易陷入局部最优。改成两阶段：
+  阶段1: 把"3架无人机各投1弹"拆解成3个独立的"1架无人机投1弹"问题分别求解，
+        每架无人机只优化自己对M1的遮蔽时长，互不知道彼此在干什么，快速拿到
+        一个"够用"的基线解。
+  阶段2: 以阶段1每架无人机各自的最优参数为中心，收缩12维的搜索边界，在这个
+        小得多的范围内做真正的12维联合PSO精修——目标函数是三机协同后的并集
+        遮蔽时长(会考虑互补/错峰效应)，不是阶段1那种各自为战的目标。
+这样搜索空间大幅收窄，评估次数也能相应减少，同时不放弃"用真实协同目标函数做
+最后把关"这一步。
 """
 import numpy as np
 import openpyxl
@@ -14,40 +26,39 @@ from config import (
 from simulation import simulate_multi_drone_multi_bomb, get_target_keypoints
 from pso import PSO
 
-PSO_SWARM_P4 = 500
-PSO_ITER_P4 = 300
+# 阶段1: 单机独立优化的PSO参数(问题规模小，预算可以给得小一些)
+PSO_SWARM_P4_STAGE1 = 150
+PSO_ITER_P4_STAGE1 = 60
+
+# 阶段2: 12维联合精修的PSO参数(搜索范围已经收窄，不需要跟冷启动时一样大的预算)
+PSO_SWARM_P4_STAGE2 = 200
+PSO_ITER_P4_STAGE2 = 100
+
+# 各无人机朝向真目标(0,200,0)的方位角窗口，理由同problem2.py/problem5.py：
+# 原始0~2π全范围里绝大部分方向PSO永远搜不到有效遮蔽，先框定在物理上合理的扇区里
+THETA_WINDOWS = [
+    (2.73, 3.53),      # FY1, 目标方位约179.4°
+    (-3.44, -2.64),    # FY2, 目标方位约-174.3°
+    (2.25, 3.05),      # FY3, 目标方位约151.9°
+]
+
+N_DRONES = 3
 
 
-def solve_problem4():
-    """求解问题4: 三机各一弹对M1"""
-    print("=" * 60)
-    print("问题4: FY1/FY2/FY3各投放1枚烟幕弹对M1 (PSO优化)")
-    print("=" * 60)
+class Problem4Objective:
+    """阶段2用: 12维联合目标函数(三机协同、取并集)，模块级可pickle"""
 
-    target_keypoints = get_target_keypoints(360, 10)
-    n_drones = 3
+    def __init__(self, n_drones):
+        self.n_drones = n_drones
 
-    # 12个变量: 3×theta, 3×speed, 3×release_time, 3×delay
-    bounds = []
-    # theta: FY1朝向原点, FY2偏y负, FY3偏y正
-    bounds += [(np.pi * 0.2, np.pi * 0.5),    # theta1 (FY1)
-               (0.0, np.pi * 0.3),             # theta2 (FY2)
-               (0.0, np.pi * 0.3)]             # theta3 (FY3)
-    # speed
-    bounds += [(DRONE_SPEED_MIN, DRONE_SPEED_MAX)] * n_drones
-    # release_time
-    bounds += [(0.0, 20.0)] * n_drones
-    # detonation_delay
-    bounds += [(0.0, 20.0)] * n_drones
-
-    def objective(x):
+    def __call__(self, x):
         theta = x[0:3]
         speed = x[3:6]
         release_times = x[6:9]
         delays = x[9:12]
 
         drone_params = []
-        for i in range(n_drones):
+        for i in range(self.n_drones):
             drone_params.append({
                 'drone_init': DRONES_INIT[i],
                 'theta': theta[i],
@@ -62,11 +73,97 @@ def solve_problem4():
         )
         return total_time
 
-    print(f"\n变量维度: 12 (3×theta, 3×speed, 3×release, 3×delay)")
-    print(f"粒子群规模: {PSO_SWARM_P4}, 迭代次数: {PSO_ITER_P4}")
 
-    pso = PSO(objective, bounds, n_particles=PSO_SWARM_P4,
-              max_iter=PSO_ITER_P4, maximize=True, verbose=True)
+class Stage1DroneObjective:
+    """阶段1用: 单架无人机独自对M1的遮蔽时长，模块级可pickle"""
+
+    def __init__(self, drone_idx):
+        self.drone_idx = drone_idx
+
+    def __call__(self, x):
+        theta, speed, release_time, delay = x
+        drone_params = [{
+            'drone_init': DRONES_INIT[self.drone_idx],
+            'theta': theta,
+            'speed': speed,
+            'release_times': np.array([release_time]),
+            'detonation_delays': np.array([delay]),
+            'missile_indices': [0],
+        }]
+        total_time, _ = simulate_multi_drone_multi_bomb(
+            drone_params, dt=DT, t_total=T_TOTAL
+        )
+        return total_time
+
+
+def _narrow_bounds(center, full_lo, full_hi, margin):
+    """以center为中心收缩出一个不超过[full_lo,full_hi]的小区间"""
+    lo = max(full_lo, center - margin)
+    hi = min(full_hi, center + margin)
+    if hi <= lo:  # 极端情况下退化保护，保证区间非空
+        hi = lo + 1e-6
+    return lo, hi
+
+
+def solve_problem4():
+    """求解问题4: 三机各一弹对M1（阶段1独立拆解 + 阶段2边界收缩联合精修）"""
+    print("=" * 60)
+    print("问题4: FY1/FY2/FY3各投放1枚烟幕弹对M1 (两阶段PSO优化)")
+    print("=" * 60)
+
+    drone_names = ['FY1', 'FY2', 'FY3']
+
+    # ============================================================
+    # 阶段1: 逐架无人机独立优化 (拆解成3个"1机1弹"问题)
+    # ============================================================
+    print("\n阶段1: 逐架无人机独立优化(各自对M1求最优单机策略)...")
+
+    stage1_results = []
+    for i in range(N_DRONES):
+        bounds_i = [
+            THETA_WINDOWS[i],
+            (DRONE_SPEED_MIN, DRONE_SPEED_MAX),
+            (0.0, 20.0),
+            (0.0, 20.0),
+        ]
+        obj_i = Stage1DroneObjective(i)
+        pso_i = PSO(obj_i, bounds_i, n_particles=PSO_SWARM_P4_STAGE1,
+                    max_iter=PSO_ITER_P4_STAGE1, maximize=True, verbose=False)
+        x_i, f_i = pso_i.optimize()
+        stage1_results.append({'theta': x_i[0], 'speed': x_i[1],
+                                'release_time': x_i[2], 'delay': x_i[3], 'time': f_i})
+        print(f"  {drone_names[i]}: θ={np.degrees(x_i[0]):.1f}° v={x_i[1]:.1f}m/s "
+              f"独自遮蔽={f_i:.4f}s")
+
+    total_stage1 = sum(r['time'] for r in stage1_results)
+    print(f"\n阶段1 单机各自最优简单求和(仅作参考基线，不是最终答案): {total_stage1:.4f} s")
+
+    # ============================================================
+    # 阶段2: 以阶段1结果为中心，收缩边界后做12维联合精修
+    # ============================================================
+    print("\n阶段2: 12维联合精修(边界已收缩到阶段1解附近)...")
+
+    bounds = []
+    theta_margin = 0.35   # rad
+    speed_margin = (DRONE_SPEED_MAX - DRONE_SPEED_MIN) * 0.3
+    time_margin = 3.0     # s，release/delay 的搜索余量
+
+    for i in range(N_DRONES):
+        bounds.append(_narrow_bounds(stage1_results[i]['theta'], *THETA_WINDOWS[i], theta_margin))
+    for i in range(N_DRONES):
+        bounds.append(_narrow_bounds(stage1_results[i]['speed'], DRONE_SPEED_MIN, DRONE_SPEED_MAX, speed_margin))
+    for i in range(N_DRONES):
+        bounds.append(_narrow_bounds(stage1_results[i]['release_time'], 0.0, 20.0, time_margin))
+    for i in range(N_DRONES):
+        bounds.append(_narrow_bounds(stage1_results[i]['delay'], 0.0, 20.0, time_margin))
+
+    objective = Problem4Objective(N_DRONES)
+
+    print(f"\n变量维度: 12 (3×theta, 3×speed, 3×release, 3×delay)")
+    print(f"粒子群规模: {PSO_SWARM_P4_STAGE2}, 迭代次数: {PSO_ITER_P4_STAGE2}")
+
+    pso = PSO(objective, bounds, n_particles=PSO_SWARM_P4_STAGE2,
+              max_iter=PSO_ITER_P4_STAGE2, maximize=True, verbose=True)
     x_opt, f_opt = pso.optimize()
 
     # 解析结果
@@ -75,10 +172,8 @@ def solve_problem4():
     release_times = x_opt[6:9]
     delays = x_opt[9:12]
 
-    drone_names = ['FY1', 'FY2', 'FY3']
-
     print(f"\n优化结果:")
-    for i in range(n_drones):
+    for i in range(N_DRONES):
         direction = np.array([np.cos(theta[i]), np.sin(theta[i]), 0.0])
         release_pos = DRONES_INIT[i] + speed[i] * direction * release_times[i]
         detonation_pos = release_pos + speed[i] * direction * delays[i]
@@ -92,7 +187,8 @@ def solve_problem4():
         print(f"    投放点: ({release_pos[0]:.2f}, {release_pos[1]:.2f}, {release_pos[2]:.2f})")
         print(f"    起爆点: ({detonation_pos[0]:.2f}, {detonation_pos[1]:.2f}, {detonation_pos[2]:.2f})")
 
-    print(f"\n  总有效遮蔽时长: {f_opt:.4f} s")
+    print(f"\n  阶段1基线(各自为战简单求和): {total_stage1:.4f} s")
+    print(f"  阶段2联合精修总有效遮蔽时长: {f_opt:.4f} s")
 
     # 保存到 result2.xlsx
     save_result2(theta, speed, release_times, delays, f_opt)

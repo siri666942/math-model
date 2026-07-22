@@ -149,9 +149,13 @@ py_solution/
 ## 五、运行说明
 
 ### 环境要求
+
+用 conda 环境 `mathmodel`（Python 3.11），避免系统 Python 版本漂移：
 ```bash
-pip install numpy scipy openpyxl matplotlib
+conda env create -f environment.yml   # 首次创建
+conda activate mathmodel
 ```
+环境已固化在 `environment.yml` 里（numpy 2.4.6 / scipy 1.17.1 / openpyxl 3.1.5 / matplotlib 3.11.0）。
 
 ### 运行全部问题
 ```bash
@@ -161,14 +165,16 @@ python -u final_solve.py
 
 ### 运行单个问题
 ```bash
-python problem1.py    # 问题1（约3s）
+python problem1.py    # 问题1（约47s，单核）
 python problem2.py    # 问题2（约2min，含PSO）
 ```
 
 ### 运行时间参考
+以下为单核实测参考值，不同机器会有出入；问题1较慢是因为精细档用 `dt=0.0001` + 8640个目标关键点做视锥判定，起爆后20s窗口要算约20万时间步。
+
 | 问题 | 耗时 |
 |------|------|
-| 问题1 | ~3s |
+| 问题1 | ~47s |
 | 问题2 | ~80s |
 | 问题3 | ~60s |
 | 问题4 | ~380s |
