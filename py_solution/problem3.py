@@ -89,10 +89,27 @@ def solve_problem3():
 
     # 用这个单弹解构造8维种子: 三发弹依次按最小间隔错开投放，起爆延时先沿用预搜结果，
     # 后续PSO会在这个起点附近继续搜索(种子只替换初始种群里的一个粒子，不锁死解)
-    seed_positions = [
-        [seed_x[0], seed_x[1], seed_x[2], BOMB_INTERVAL_MIN, BOMB_INTERVAL_MIN,
-         seed_x[3], seed_x[3], seed_x[3]],
+    seed_moderate_delay = [seed_x[0], seed_x[1], seed_x[2], BOMB_INTERVAL_MIN, BOMB_INTERVAL_MIN,
+                            seed_x[3], seed_x[3], seed_x[3]]
+
+    # 第二个种子: 参考学长MATLAB代码(m3.m)里手动收窄过的搜索范围——"贴近速度上限+
+    # 第一发几乎零延时"这个策略分支。用A题参数验证过: PSO单靠上面那个(低速+中等延时)
+    # 种子只能收敛到5.51s，加上这个种子之后第40代就到7.64s，逼近参考值7.65s。
+    # 速度/时序都按当前config的实际范围换算，不写死A题验证时的绝对数值，换成C题范围
+    # 也能用。
+    speed_hi = DRONE_SPEED_MAX - 0.1 * (DRONE_SPEED_MAX - DRONE_SPEED_MIN)
+    seed_high_speed_low_delay = [
+        seed_x[0],           # 复用同一个热启动搜到的方向
+        speed_hi,             # 速度贴近上限
+        0.1,                  # release1: 尽早投放
+        BOMB_INTERVAL_MIN,    # interval2: 最小间隔
+        BOMB_INTERVAL_MIN,    # interval3: 最小间隔
+        0.1,                  # delay1: 几乎零延时
+        3.0,                  # delay2
+        3.0,                  # delay3
     ]
+
+    seed_positions = [seed_moderate_delay, seed_high_speed_low_delay]
 
     objective = Problem3Objective(drone_init, target_keypoints)
 
