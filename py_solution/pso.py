@@ -166,3 +166,48 @@ class PSO:
             return self.best_position, -self.best_value
         else:
             return self.best_position, self.best_value
+
+
+def local_polish(objective_func, x0, bounds, method='Powell', maxiter=200, radius_frac=0.05):
+    """
+    PSO收敛完之后，在最优解附近做一次无梯度局部精修——对应国奖论文/MATLAB代码里
+    "PSO+禁忌搜索"或者particleswarm的HybridFcn=@fmincon那一层收尾。
+
+    我们的目标函数是"遮蔽时长对参数的积分"，不是纯离散的0/1判定，随参数小幅变化时
+    通常是连续变化的(遮蔽区间的边界会平滑地移动)，但仿真本身有dt离散粒度带来的
+    噪声，用有限差分梯度法(BFGS一类)容易被这点噪声带偏，所以选无梯度的Powell/
+    Nelder-Mead，比强求梯度稳一些。
+
+    实测过一个教训：如果直接把PSO用的那套完整bounds原样传给Powell，它会在大范围里
+    大步搜索，从一个4.9s的解直接走丢到0s(这类占空比很低的目标函数——大部分参数
+    组合都是0——对无梯度法很不友好，走出好解所在的那个窄"盆地"就再也回不来)。所以
+    精修阶段强制把搜索范围收紧到x0周围 ±radius_frac*(hi-lo) 的一个小邻域内，真正
+    做"局部"精修，而不是让它在全局范围里重新摸索。
+
+    objective_func: 要最大化的目标函数 f(x)（不是PSO内部那种取反后的版本，直接传
+                     原始的、值越大越好的目标函数）
+    x0: PSO给出的最优解，作为精修起点
+    bounds: [(low,high), ...]，跟PSO用的应该是同一套完整边界(函数内部会自动收紧)
+    radius_frac: 精修邻域半径，占每一维完整区间长度的比例，默认5%
+
+    Returns:
+        (x_polished, f_polished): 精修后的解和对应目标值。如果精修没有找到更好的解
+        (可能落回一个稍差的点，无梯度法不保证单调)，调用方应该自己跟PSO原结果比较，
+        取较大的那个——这个函数只负责精修，不负责判断要不要采纳。
+    """
+    from scipy.optimize import minimize
+
+    x0 = np.asarray(x0, dtype=float)
+    bounds_arr = np.asarray(bounds, dtype=float)
+    lo, hi = bounds_arr[:, 0], bounds_arr[:, 1]
+    margin = radius_frac * (hi - lo)
+    local_bounds = list(zip(np.maximum(lo, x0 - margin), np.minimum(hi, x0 + margin)))
+
+    def neg_obj(x):
+        return -objective_func(np.asarray(x))
+
+    result = minimize(
+        neg_obj, x0, method=method, bounds=local_bounds,
+        options={'maxiter': maxiter, 'xtol': 1e-4, 'ftol': 1e-5}
+    )
+    return np.asarray(result.x), -result.fun

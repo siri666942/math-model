@@ -12,7 +12,7 @@ from config import (
     BOMB_INTERVAL_MIN, DT, T_TOTAL,
 )
 from simulation import simulate_multi_bomb_single_drone, get_target_keypoints
-from pso import PSO
+from pso import PSO, local_polish
 from problem2 import Problem2Objective
 
 # 为 problem3 使用独立的 PSO 参数
@@ -120,6 +120,16 @@ def solve_problem3():
               max_iter=PSO_MAX_ITER_P3, maximize=True, verbose=True,
               seed_positions=seed_positions)
     x_opt, f_opt = pso.optimize()
+
+    # PSO收敛完之后做一次局部精修(对应论文里PSO+TS、MATLAB fmincon hybrid那一层收尾)，
+    # 精修不保证一定更好(无梯度法不单调)，跟PSO原结果比较取较大的那个
+    print("\n局部精修(Powell)...")
+    x_polished, f_polished = local_polish(objective, x_opt, bounds)
+    if f_polished > f_opt:
+        print(f"  精修有提升: {f_opt:.4f}s -> {f_polished:.4f}s")
+        x_opt, f_opt = x_polished, f_polished
+    else:
+        print(f"  精修没有提升({f_polished:.4f}s <= {f_opt:.4f}s)，保留PSO原结果")
 
     # 解析结果
     theta = x_opt[0]

@@ -24,7 +24,7 @@ from config import (
     DRONES_INIT, DRONE_SPEED_MIN, DRONE_SPEED_MAX, DT, T_TOTAL,
 )
 from simulation import simulate_multi_drone_multi_bomb, get_target_keypoints
-from pso import PSO
+from pso import PSO, local_polish
 from final_solve import search_best_detonation
 
 # 阶段1兜底用: 如果三维空间采样也没找到可行解，才退回猜角度窗口的PSO再试一次
@@ -181,6 +181,14 @@ def solve_problem4():
     pso = PSO(objective, bounds, n_particles=PSO_SWARM_P4_STAGE2,
               max_iter=PSO_ITER_P4_STAGE2, maximize=True, verbose=True)
     x_opt, f_opt = pso.optimize()
+
+    print("\n局部精修(Powell)...")
+    x_polished, f_polished = local_polish(objective, x_opt, bounds)
+    if f_polished > f_opt:
+        print(f"  精修有提升: {f_opt:.4f}s -> {f_polished:.4f}s")
+        x_opt, f_opt = x_polished, f_polished
+    else:
+        print(f"  精修没有提升({f_polished:.4f}s <= {f_opt:.4f}s)，保留PSO原结果")
 
     # 解析结果
     theta = x_opt[0:3]

@@ -10,7 +10,7 @@ from config import (
     PSO_SWARM_SIZE, PSO_MAX_ITER,
 )
 from simulation import simulate_single_bomb, get_target_keypoints
-from pso import PSO
+from pso import PSO, local_polish
 
 
 class Problem2Objective:
@@ -59,6 +59,14 @@ def solve_problem2():
     # PSO 优化
     pso = PSO(objective, bounds, n_particles=200, max_iter=100, maximize=True, verbose=True)
     x_opt, f_opt = pso.optimize()
+
+    print("\n局部精修(Powell)...")
+    x_polished, f_polished = local_polish(objective, x_opt, bounds)
+    if f_polished > f_opt:
+        print(f"  精修有提升: {f_opt:.4f}s -> {f_polished:.4f}s")
+        x_opt, f_opt = x_polished, f_polished
+    else:
+        print(f"  精修没有提升({f_polished:.4f}s <= {f_opt:.4f}s)，保留PSO原结果")
 
     print(f"\n优化结果:")
     print(f"  航向角θ: {x_opt[0]:.4f} rad ({np.degrees(x_opt[0]):.2f}°)")

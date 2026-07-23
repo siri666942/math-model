@@ -17,7 +17,7 @@ from config import (
     BOMB_INTERVAL_MIN, INTERCEPT_ORDER, DT, T_TOTAL,
 )
 from simulation import simulate_multi_drone_multi_bomb, get_target_keypoints
-from pso import PSO
+from pso import PSO, local_polish
 
 PSO_SWARM_P5 = 300
 PSO_ITER_P5 = 200
@@ -236,6 +236,14 @@ def solve_problem5():
     pso_joint = PSO(_joint_objective, bounds_joint, n_particles=PSO_SWARM_P5,
                     max_iter=PSO_ITER_P5, maximize=True, verbose=True)
     x_opt_joint, f_opt_joint = pso_joint.optimize()
+
+    print("\n局部精修(Powell)...")
+    x_polished, f_polished = local_polish(_joint_objective, x_opt_joint, bounds_joint)
+    if f_polished > f_opt_joint:
+        print(f"  精修有提升: {f_opt_joint:.4f}s -> {f_polished:.4f}s")
+        x_opt_joint, f_opt_joint = x_polished, f_polished
+    else:
+        print(f"  精修没有提升({f_polished:.4f}s <= {f_opt_joint:.4f}s)，保留PSO原结果")
 
     print(f"\n联合优化总有效遮蔽时长: {f_opt_joint:.4f} s")
 
