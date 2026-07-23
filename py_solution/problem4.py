@@ -25,17 +25,21 @@ from config import (
 )
 from simulation import simulate_multi_drone_multi_bomb, get_target_keypoints
 from pso import PSO
+from final_solve import search_best_detonation
 
-# 阶段1: 单机独立优化的PSO参数(问题规模小，预算可以给得小一些)
-PSO_SWARM_P4_STAGE1 = 150
-PSO_ITER_P4_STAGE1 = 60
+# 阶段1兜底用: 如果三维空间采样也没找到可行解，才退回猜角度窗口的PSO再试一次
+PSO_SWARM_P4_STAGE1_FALLBACK = 150
+PSO_ITER_P4_STAGE1_FALLBACK = 60
+STAGE1_N_FAST = 20000  # search_best_detonation 阶段1的采样点数
 
 # 阶段2: 12维联合精修的PSO参数(搜索范围已经收窄，不需要跟冷启动时一样大的预算)
 PSO_SWARM_P4_STAGE2 = 200
 PSO_ITER_P4_STAGE2 = 100
 
-# 各无人机朝向真目标(0,200,0)的方位角窗口，理由同problem2.py/problem5.py：
-# 原始0~2π全范围里绝大部分方向PSO永远搜不到有效遮蔽，先框定在物理上合理的扇区里
+# 各无人机朝向真目标(0,200,0)的方位角窗口——只用于阶段1兜底PSO的搜索范围，
+# 正常路径下阶段1走search_best_detonation(三维空间采样反解方向)，不依赖这个猜测窗口。
+# 之前的教训：FY2/FY3若直接靠这个"指向目标"猜出来的窗口搜索，会把真正的最优方向
+# 排除在外(实测跟国奖论文报告的FY2/FY3最优方向对不上)，导致阶段1两架都搜出0。
 THETA_WINDOWS = [
     (2.73, 3.53),      # FY1, 目标方位约179.4°
     (-3.44, -2.64),    # FY2, 目标方位约-174.3°
@@ -115,24 +119,33 @@ def solve_problem4():
 
     # ============================================================
     # 阶段1: 逐架无人机独立优化 (拆解成3个"1机1弹"问题)
+    # 用search_best_detonation在无人机周围的三维空间里采样候选起爆点、反解方向，
+    # 不预先猜角度窗口——避免猜错窗口把真正的最优方向排除在外(FY2/FY3就吃过这个亏)。
     # ============================================================
-    print("\n阶段1: 逐架无人机独立优化(各自对M1求最优单机策略)...")
+    print("\n阶段1: 逐架无人机独立优化(三维空间采样，不预设角度窗口)...")
 
     stage1_results = []
     for i in range(N_DRONES):
-        bounds_i = [
-            THETA_WINDOWS[i],
-            (DRONE_SPEED_MIN, DRONE_SPEED_MAX),
-            (0.0, 20.0),
-            (0.0, 20.0),
-        ]
-        obj_i = Stage1DroneObjective(i)
-        pso_i = PSO(obj_i, bounds_i, n_particles=PSO_SWARM_P4_STAGE1,
-                    max_iter=PSO_ITER_P4_STAGE1, maximize=True, verbose=False)
-        x_i, f_i = pso_i.optimize()
-        stage1_results.append({'theta': x_i[0], 'speed': x_i[1],
-                                'release_time': x_i[2], 'delay': x_i[3], 'time': f_i})
-        print(f"  {drone_names[i]}: θ={np.degrees(x_i[0]):.1f}° v={x_i[1]:.1f}m/s "
+        params, f_i = search_best_detonation(DRONES_INIT[i], missile_idx=0, n_fast=STAGE1_N_FAST)
+
+        if params is None:
+            # 兜底: 三维空间采样也没找到可行解，退回猜角度窗口的PSO再试一次
+            print(f"  {drone_names[i]}: 三维采样未找到可行解，退回窗口PSO兜底...")
+            bounds_i = [THETA_WINDOWS[i], (DRONE_SPEED_MIN, DRONE_SPEED_MAX), (0.0, 20.0), (0.0, 20.0)]
+            obj_i = Stage1DroneObjective(i)
+            pso_i = PSO(obj_i, bounds_i, n_particles=PSO_SWARM_P4_STAGE1_FALLBACK,
+                        max_iter=PSO_ITER_P4_STAGE1_FALLBACK, maximize=True, verbose=False)
+            x_i, f_i = pso_i.optimize()
+            theta_i, speed_i, rt_i, delay_i = x_i[0], x_i[1], x_i[2], x_i[3]
+        else:
+            theta_i = params['theta']
+            speed_i = params['speed']
+            rt_i = params['release_time']
+            delay_i = params['delay']
+
+        stage1_results.append({'theta': theta_i, 'speed': speed_i,
+                                'release_time': rt_i, 'delay': delay_i, 'time': f_i})
+        print(f"  {drone_names[i]}: θ={np.degrees(theta_i):.1f}° v={speed_i:.1f}m/s "
               f"独自遮蔽={f_i:.4f}s")
 
     total_stage1 = sum(r['time'] for r in stage1_results)
@@ -144,12 +157,15 @@ def solve_problem4():
     print("\n阶段2: 12维联合精修(边界已收缩到阶段1解附近)...")
 
     bounds = []
-    theta_margin = 0.35   # rad
+    theta_margin = 0.45   # rad，比之前略放宽，给阶段2多一点纠偏空间
     speed_margin = (DRONE_SPEED_MAX - DRONE_SPEED_MIN) * 0.3
     time_margin = 3.0     # s，release/delay 的搜索余量
 
+    # 注意: 这里clamp用的是完整角度范围(-pi,pi]，不是THETA_WINDOWS——
+    # 阶段1的theta现在来自三维空间反解，可能落在THETA_WINDOWS之外(FY2/FY3就是这样)，
+    # 再用旧窗口去clamp会重新把刚找到的正确方向卡掉，等于白修。
     for i in range(N_DRONES):
-        bounds.append(_narrow_bounds(stage1_results[i]['theta'], *THETA_WINDOWS[i], theta_margin))
+        bounds.append(_narrow_bounds(stage1_results[i]['theta'], -np.pi, np.pi, theta_margin))
     for i in range(N_DRONES):
         bounds.append(_narrow_bounds(stage1_results[i]['speed'], DRONE_SPEED_MIN, DRONE_SPEED_MAX, speed_margin))
     for i in range(N_DRONES):
