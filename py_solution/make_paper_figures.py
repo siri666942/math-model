@@ -147,38 +147,97 @@ def fig_view_cone():
 
 
 # ============================================================
-# 图3 多机多云团协同遮蔽机理（3D 简化）
+# 图3 多机多云团协同遮蔽机理（2D 概念示意图，关键点错列）
 # ============================================================
 def fig_multi_cloud():
-    fig = plt.figure(figsize=(10, 6.5))
-    ax = fig.add_subplot(111, projection="3d")
-    M = np.array([20, 0, 2.0])
-    S1 = np.array([12, -0.2, 1.7])
-    S2 = np.array([8,  0.2, 1.2])
-    S3 = np.array([4,  0.0, 0.7])
-    R = cfg.EFFECTIVE_RADIUS
-    for s, lab, col in [(S1,"云1",C_SMOKE),(S2,"云2","#5DADE2"),(S3,"云3","#48C9B0")]:
-        u_, v_ = np.meshgrid(np.linspace(0, np.pi, 10), np.linspace(0, 2*np.pi, 14))
-        xs = s[0] + R * np.sin(u_) * np.cos(v_)
-        ys = s[1] + R * np.sin(u_) * np.sin(v_)
-        zs = s[2] + R * np.cos(u_)
-        ax.plot_surface(xs, ys, zs, color=col, alpha=0.30, edgecolor='none')
-        ax.text(s[0], s[1], s[2]+R+0.1, lab, fontsize=10, color=col)
-    P_T = np.array([0, 2, 0])
-    r, h = cfg.TARGET_RADIUS, cfg.TARGET_HEIGHT
-    z_arr = np.linspace(0, h, 12)
-    th_arr = np.linspace(0, 2*np.pi, 24)
-    Z, TH = np.meshgrid(z_arr, th_arr)
-    Xc = P_T[0] + r * np.cos(TH); Yc = P_T[1] + r * np.sin(TH); Zc = Z
-    ax.plot_surface(Xc, Yc, Zc, color=C_TARGET, alpha=0.4, edgecolor='none')
-    ax.plot([M[0], P_T[0]], [M[1], P_T[1]], [M[2], h/2],
-            color="black", linewidth=0.8, linestyle="--", alpha=0.5)
-    ax.text(M[0], M[1], M[2]+0.3, "A 导弹", fontsize=10, color=C_MISSILE)
-    ax.text(P_T[0], P_T[1]+r+0.1, h+0.3, "真目标 G", fontsize=10, color=C_TARGET)
-    ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)"); ax.set_zlabel("Z (m)")
-    ax.set_title("多机多云团协同（互补）遮蔽机理示意", fontsize=12)
-    ax.set_xlim(-2, 22); ax.set_ylim(-3, 5); ax.set_zlim(-1, 3.5)
-    ax.view_init(elev=20, azim=-50)
+    fig, ax = plt.subplots(figsize=(12, 6.5))
+
+    # 目标圆柱（左端）—— 用矩形表示
+    target_x = 0.5
+    target_w = 1.0
+    target_h = 3.0
+    rect = plt.Rectangle((target_x, 0), target_w, target_h,
+                         color=C_TARGET, alpha=0.4, ec="black", lw=1.2)
+    ax.add_patch(rect)
+    ax.text(target_x + target_w/2, target_h + 0.25, "真目标 (圆柱纵截面)",
+            ha="center", fontsize=12, color=C_TARGET, fontweight='bold')
+
+    # 关键点（6个，2列错开避免与云重叠）
+    # 左侧列（紧贴目标）：K1上、K3中、K5下
+    # 右侧列（靠近云团位置）：K2上、K4中、K6下
+    keypoints = [
+        (target_x + target_w, 2.4, "K1"),   # 紧贴目标 上
+        (4.2, 2.4, "K2"),                   # 靠近云1 上
+        (target_x + target_w, 1.5, "K3"),   # 紧贴目标 中
+        (4.2, 1.5, "K4"),                   # 靠近云2 中
+        (target_x + target_w, 0.6, "K5"),   # 紧贴目标 下
+        (4.2, 0.6, "K6"),                   # 靠近云3 下
+    ]
+    for (x_, y_, lab) in keypoints:
+        ax.scatter([x_], [y_], c=C_ACCENT, s=55, zorder=6, edgecolor='black', linewidth=0.6)
+        # 标注：左列放在更左、右列放在更右，避免被云挡住
+        if x_ < 1.5:
+            ax.text(x_-0.25, y_, lab, fontsize=11, fontweight='bold', va='center', ha='right')
+        else:
+            ax.text(x_+0.30, y_, lab, fontsize=11, fontweight='bold', va='center', ha='left')
+
+    # 视线（导弹→关键点，灰色虚线）
+    missile_x = 9.5
+    missile_y = 1.5
+    ax.scatter([missile_x], [missile_y], c=C_MISSILE, marker="^", s=220, zorder=5)
+    ax.text(missile_x+0.2, missile_y+0.15, "导弹 M", fontsize=12, color=C_MISSILE, fontweight='bold')
+    for (x_, y_, lab) in keypoints:
+        ax.plot([missile_x, x_], [missile_y, y_], color="gray", linewidth=0.4, alpha=0.25, linestyle=":")
+
+    # 三朵云（垂直方向分开更多，避免重叠）
+    # 云1：挡上半 K1, K2
+    c1 = plt.Circle((5.0, 2.4), 0.6, color=C_SMOKE, alpha=0.6, ec=C_DRONE, lw=1.5)
+    ax.add_patch(c1)
+    ax.text(5.0, 3.30, "云 1\n(挡 K1, K2)", ha="center", fontsize=10, color=C_DRONE, fontweight='bold')
+
+    # 云2：挡中段 K3, K4
+    c2 = plt.Circle((5.0, 1.5), 0.6, color="#5DADE2", alpha=0.6, ec="#1B4F72", lw=1.5)
+    ax.add_patch(c2)
+    ax.text(5.0, 2.40, "云 2\n(挡 K3, K4)", ha="center", fontsize=10, color="#1B4F72", fontweight='bold')
+
+    # 云3：挡下半 K5, K6
+    c3 = plt.Circle((5.0, 0.6), 0.6, color="#48C9B0", alpha=0.6, ec="#117A65", lw=1.5)
+    ax.add_patch(c3)
+    ax.text(5.0, 0.0, "云 3\n(挡 K5, K6)", ha="center", fontsize=10, color="#117A65", fontweight='bold')
+
+    # 视线遮挡（彩色粗线）—— 导弹到被各云挡住的视线
+    blocked_map = {"K1":C_DRONE, "K2":C_DRONE, "K3":"#1B4F72", "K4":"#1B4F72", "K5":"#117A65", "K6":"#117A65"}
+    for (x_, y_, lab) in keypoints:
+        col = blocked_map[lab]
+        ax.plot([missile_x, x_], [missile_y, y_], color=col, linewidth=2.0, alpha=0.7)
+
+    # "被挡住"标记（绿色圈）
+    for (x_, y_, _) in keypoints:
+        ax.scatter([x_], [y_], s=320, facecolor='none', edgecolor='green', linewidth=2.0, zorder=4)
+
+    # 公式框
+    ax.text(0.5, 3.95, r"完全遮蔽 ⟺ $\forall$ 关键点 K_i: 至少一朵云挡住对应视线",
+            fontsize=11, fontweight='bold',
+            bbox=dict(boxstyle="round,pad=0.4", facecolor="#FFF8E1", edgecolor=C_ACCENT, lw=1.0))
+
+    # 视线方向箭头
+    ax.annotate("", xy=(missile_x-0.3, missile_y), xytext=(missile_x+1.0, missile_y),
+                arrowprops=dict(arrowstyle="->", color="black", lw=1.2))
+    ax.text(missile_x-1.3, missile_y+0.25, "视线方向", fontsize=10, color="black")
+
+    ax.set_xlim(-1.0, 11)
+    ax.set_ylim(-0.7, 4.2)
+    ax.set_aspect("equal")
+    ax.set_xlabel("沿视线方向 (m, 等比示意)", fontsize=11)
+    ax.set_ylabel("目标高度方向 (m, 等比示意)", fontsize=11)
+    ax.set_title("多机多云团协同（互补）遮蔽机理示意", fontsize=13, pad=10)
+    ax.legend(handles=[
+        plt.scatter([0], [0], c=C_MISSILE, marker="^", s=100, label="导弹"),
+        plt.scatter([0], [0], c=C_TARGET, marker="s", s=100, label="真目标（截面）"),
+        plt.scatter([0], [0], c=C_ACCENT, s=50, label="关键点 K_i"),
+        plt.scatter([0], [0], s=200, facecolor='none', edgecolor='green', lw=2, label="被云挡住"),
+    ], loc="lower right", frameon=True, fontsize=9)
+    ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(out_path("paper_fig_3_multi_cloud.png"), dpi=180)
     plt.close(fig)
@@ -516,25 +575,26 @@ def fig_drone_speed():
 
 
 # ============================================================
-# 图13 问题4 三机协同策略
+# 图13 问题4 三机协同策略（去掉云团球避免3D重叠，只画航迹+起爆点）
 # ============================================================
 def fig_p4_strategy():
     wb = openpyxl.load_workbook(os.path.join(os.path.dirname(__file__), "result2.xlsx"))
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))[1:]
-    fig = plt.figure(figsize=(10, 7))
+    fig = plt.figure(figsize=(10, 6.5))
     ax = fig.add_subplot(111, projection="3d")
     M = cfg.MISSILES_INIT
     D = cfg.DRONES_INIT
-    ax.scatter(M[0,0], M[0,1], M[0,2], c=C_MISSILE, marker="^", s=100, label="M1")
-    ax.scatter(D[:3,0], D[:3,1], D[:3,2], c=C_DRONE, marker="o", s=80, label="FY1-3")
-    ax.scatter(*cfg.FAKE_TARGET, c=C_FAKE, marker="x", s=80, label="假目标")
+    ax.scatter(M[0,0], M[0,1], M[0,2], c=C_MISSILE, marker="^", s=120, label="M1 (来袭)")
+    ax.scatter(D[:3,0], D[:3,1], D[:3,2], c=C_DRONE, marker="o", s=80, label="FY1-3 (起点)")
+    ax.scatter(*cfg.FAKE_TARGET, c=C_FAKE, marker="x", s=80, label="假目标(原点)")
+    # 真目标（浅色）
     r, h = cfg.TARGET_RADIUS, cfg.TARGET_HEIGHT
-    z_arr = np.linspace(0, h, 8); th_arr = np.linspace(0, 2*np.pi, 16)
+    z_arr = np.linspace(0, h, 6); th_arr = np.linspace(0, 2*np.pi, 12)
     Z, TH = np.meshgrid(z_arr, th_arr)
     Xc = cfg.TARGET_CENTER[0] + r*np.cos(TH)
     Yc = cfg.TARGET_CENTER[1] + r*np.sin(TH)
-    ax.plot_surface(Xc, Yc, Z, color=C_TARGET, alpha=0.4, edgecolor='none')
+    ax.plot_surface(Xc, Yc, Z, color=C_TARGET, alpha=0.3, edgecolor='none')
     colors = [C_DRONE, "#48C9B0", "#D68910"]
     for i, (r_, col) in enumerate(zip(rows, colors)):
         theta = r_[1]; v = r_[3]; tr = r_[4]; td = r_[5]
@@ -545,20 +605,18 @@ def fig_p4_strategy():
         fx = D[i,0] + v*direction[0]*t_fly
         fy = D[i,1] + v*direction[1]*t_fly
         fz = np.full_like(t_fly, D[i,2])
-        ax.plot(fx, fy, fz, color=col, linewidth=1.0, alpha=0.7, label=f"FY{i+1} 航迹")
-        ax.scatter([burst[0]], [burst[1]], [burst[2]], c=col, marker="*", s=140)
-        u_, v_ = np.meshgrid(np.linspace(0, np.pi, 8), np.linspace(0, 2*np.pi, 12))
-        xs = burst[0] + cfg.EFFECTIVE_RADIUS*np.sin(u_)*np.cos(v_)
-        ys = burst[1] + cfg.EFFECTIVE_RADIUS*np.sin(u_)*np.sin(v_)
-        zs = burst[2] + cfg.EFFECTIVE_RADIUS*np.cos(u_)
-        ax.plot_surface(xs, ys, zs, color=col, alpha=0.18, edgecolor='none')
+        ax.plot(fx, fy, fz, color=col, linewidth=1.4, alpha=0.85, label=f"FY{i+1} 航迹")
+        # 起爆点（带标签）
+        ax.scatter([burst[0]], [burst[1]], [burst[2]], c=col, marker="*", s=180, zorder=5)
+        ax.text(burst[0], burst[1], burst[2]+30, f"FY{i+1}起爆", color=col, fontsize=9, fontweight='bold')
+    # M1 轨迹
     t_M = np.linspace(0, 25, 50)
     M1 = np.array([missile_position(t, 0) for t in t_M])
-    ax.plot(M1[:,0], M1[:,1], M1[:,2], color=C_MISSILE, linewidth=1.0, linestyle="--", alpha=0.6, label="M1 轨迹")
-    ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)"); ax.set_zlabel("Z (m)")
-    ax.set_title("问题4：三机协同最优策略（起爆点+云团球体）", fontsize=12)
-    ax.legend(loc="upper left", frameon=False, fontsize=8)
-    ax.view_init(elev=18, azim=-60)
+    ax.plot(M1[:,0], M1[:,1], M1[:,2], color=C_MISSILE, linewidth=1.4, linestyle="--", alpha=0.7, label="M1 飞行轨迹")
+    ax.set_xlabel("X (m)", fontsize=10); ax.set_ylabel("Y (m)", fontsize=10); ax.set_zlabel("Z (m)", fontsize=10)
+    ax.set_title("问题4：三机协同最优策略（航迹+起爆点, 不画云团球以避免遮挡）", fontsize=12)
+    ax.legend(loc="upper left", frameon=True, fontsize=8)
+    ax.view_init(elev=22, azim=-55)
     fig.tight_layout()
     fig.savefig(out_path("paper_fig_13_p4_strategy.png"), dpi=180)
     plt.close(fig)
@@ -566,48 +624,85 @@ def fig_p4_strategy():
 
 
 # ============================================================
-# 图14 问题5 五机多弹策略
+# 图14 问题5 五机多弹策略（去掉云团球，俯视+侧视双视角）
 # ============================================================
 def fig_p5_strategy():
     wb = openpyxl.load_workbook(os.path.join(os.path.dirname(__file__), "result3.xlsx"))
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))[1:]
-    fig = plt.figure(figsize=(11, 7))
-    ax = fig.add_subplot(111, projection="3d")
+    # 双图：左=俯视图（X-Y），右=侧视图（X-Z）
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
     M = cfg.MISSILES_INIT
     D = cfg.DRONES_INIT
-    ax.scatter(M[:,0], M[:,1], M[:,2], c=C_MISSILE, marker="^", s=100, label="M1-3")
-    ax.scatter(D[:,0], D[:,1], D[:,2], c=C_DRONE, marker="o", s=80, label="FY1-5")
-    ax.scatter(*cfg.FAKE_TARGET, c=C_FAKE, marker="x", s=80, label="假目标")
-    r, h = cfg.TARGET_RADIUS, cfg.TARGET_HEIGHT
-    z_arr = np.linspace(0, h, 8); th_arr = np.linspace(0, 2*np.pi, 16)
-    Z, TH = np.meshgrid(z_arr, th_arr)
-    Xc = cfg.TARGET_CENTER[0] + r*np.cos(TH)
-    Yc = cfg.TARGET_CENTER[1] + r*np.sin(TH)
-    ax.plot_surface(Xc, Yc, Z, color=C_TARGET, alpha=0.3, edgecolor='none')
-    missile_color = {0: C_MISSILE, 1: "#5DADE2", 2: "#48C9B0"}
+    # 颜色：按目标导弹
+    missile_color = {0: C_MISSILE, 1: "#1B4F72", 2: "#117A65"}
+    missile_label = {0: "M1", 1: "M2", 2: "M3"}
+    # === 左图：俯视（X-Y）===
+    ax = axes[0]
+    ax.scatter(0, 0, c=C_FAKE, marker="x", s=120, label="假目标")
+    th = np.linspace(0, 2*np.pi, 50)
+    ax.plot(cfg.TARGET_CENTER[0]+cfg.TARGET_RADIUS*np.cos(th),
+            cfg.TARGET_CENTER[1]+cfg.TARGET_RADIUS*np.sin(th),
+            color=C_TARGET, linewidth=1.5, label="真目标")
+    # 3枚导弹
+    for k in range(3):
+        t_M = np.linspace(0, 30, 40)
+        Mk = np.array([missile_position(t, k) for t in t_M])
+        ax.plot(Mk[:,0], Mk[:,1], color=C_MISSILE, linewidth=1.0, linestyle="--", alpha=0.4)
+        ax.scatter([Mk[0,0]], [Mk[0,1]], c=C_MISSILE, marker="^", s=80)
+        ax.text(Mk[0,0]+200, Mk[0,1], f"M{k+1}", color=C_MISSILE, fontsize=10, fontweight='bold')
+    # 5架无人机起爆点（按目标着色）
     for r_ in rows:
         di = int(r_[0][2]) - 1
         theta = r_[1]; v = r_[3]; tr = r_[6]; td = r_[7]
         mi = int(r_[5][1]) - 1
         direction = np.array([np.cos(theta), np.sin(theta), 0.0])
         rel = D[di] + v * direction * tr
-        burst = np.array([rel[0]+v*direction[0]*td, rel[1]+v*direction[1]*td, rel[2]-0.5*cfg.G*td**2])
+        burst = np.array([rel[0]+v*direction[0]*td, rel[1]+v*direction[1]*td])
         col = missile_color.get(mi, C_DRONE)
-        ax.scatter([burst[0]], [burst[1]], [burst[2]], c=col, marker="*", s=120)
-        u_, v_ = np.meshgrid(np.linspace(0, np.pi, 6), np.linspace(0, 2*np.pi, 10))
-        xs = burst[0] + cfg.EFFECTIVE_RADIUS*np.sin(u_)*np.cos(v_)
-        ys = burst[1] + cfg.EFFECTIVE_RADIUS*np.sin(u_)*np.sin(v_)
-        zs = burst[2] + cfg.EFFECTIVE_RADIUS*np.cos(u_)
-        ax.plot_surface(xs, ys, zs, color=col, alpha=0.15, edgecolor='none')
+        ax.scatter([burst[0]], [burst[1]], c=col, marker="*", s=100, zorder=5)
+    ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)")
+    ax.set_title("问题5 起爆点分布 (俯视, X-Y)", fontsize=11)
+    ax.grid(True, alpha=0.3)
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.legend(loc="upper right", frameon=True, fontsize=8)
+
+    # === 右图：侧视（X-Z）===
+    ax = axes[1]
+    ax.scatter(0, 0, c=C_FAKE, marker="x", s=120, label="假目标")
+    # 真目标（侧面投影：矩形）
+    rect = plt.Rectangle((cfg.TARGET_CENTER[0]-cfg.TARGET_RADIUS, 0),
+                          2*cfg.TARGET_RADIUS, cfg.TARGET_HEIGHT,
+                          color=C_TARGET, alpha=0.5, label="真目标")
+    ax.add_patch(rect)
+    # 3枚导弹轨迹
     for k in range(3):
-        t_M = np.linspace(0, 25, 40)
+        t_M = np.linspace(0, 30, 40)
         Mk = np.array([missile_position(t, k) for t in t_M])
-        ax.plot(Mk[:,0], Mk[:,1], Mk[:,2], color=C_MISSILE, linewidth=0.9, linestyle="--", alpha=0.5)
-    ax.set_xlabel("X (m)"); ax.set_ylabel("Y (m)"); ax.set_zlabel("Z (m)")
-    ax.set_title("问题5：五机多弹多导弹协同最优策略（按目标着色）", fontsize=12)
-    ax.legend(loc="upper left", frameon=False, fontsize=9)
-    ax.view_init(elev=18, azim=-60)
+        ax.plot(Mk[:,0], Mk[:,2], color=C_MISSILE, linewidth=1.0, linestyle="--", alpha=0.4)
+    # 5架无人机起爆点（按目标着色）
+    for r_ in rows:
+        di = int(r_[0][2]) - 1
+        theta = r_[1]; v = r_[3]; tr = r_[6]; td = r_[7]
+        mi = int(r_[5][1]) - 1
+        direction = np.array([np.cos(theta), np.sin(theta), 0.0])
+        rel = D[di] + v * direction * tr
+        burst = np.array([rel[0]+v*direction[0]*td,
+                          rel[2]-0.5*cfg.G*td**2 - cfg.SMOKE_SINK_SPEED*0])  # 起爆点z
+        col = missile_color.get(mi, C_DRONE)
+        ax.scatter([burst[0]], [burst[1]], c=col, marker="*", s=100, zorder=5)
+    # 图例
+    handles = [plt.scatter([0], [0], c=C_MISSILE, marker="*", s=100, label=f"指向 {missile_label[0]} 的起爆点"),
+               plt.scatter([0], [0], c="#1B4F72", marker="*", s=100, label=f"指向 {missile_label[1]} 的起爆点"),
+               plt.scatter([0], [0], c="#117A65", marker="*", s=100, label=f"指向 {missile_label[2]} 的起爆点")]
+    ax.legend(handles=handles, loc="upper right", frameon=True, fontsize=8)
+    ax.set_xlabel("X (m)"); ax.set_ylabel("Z (m)")
+    ax.set_title("问题5 起爆点分布 (侧视, X-Z)", fontsize=11)
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, 21000)
+    ax.set_ylim(0, 2500)
+
+    fig.suptitle("问题5：五机多弹多导弹协同最优策略起爆点分布", fontsize=13, y=1.02)
     fig.tight_layout()
     fig.savefig(out_path("paper_fig_14_p5_strategy.png"), dpi=180)
     plt.close(fig)

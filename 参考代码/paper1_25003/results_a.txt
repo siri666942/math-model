@@ -1,0 +1,42 @@
+===A题 Results (2025 CUMCM Problem A)===
+
+SMOKE_SINK_SPEED = 3.0 m/s
+DRONE_SPEED = [70.0, 140.0] m/s
+P1: release=1.5s, delay=3.6s
+
+P1:
+  effective_time: 1.3916s
+  paper_reference: 1.392s
+  diff: 0.0%
+  compute_time: 0.9s
+
+P2:
+  effective_time: 3.8800s
+  theta: 3.1333rad (179.52deg)
+  speed: 88.18m/s
+  release_time: 0.9911s
+  delay: 3.3409s
+  paper_reference: 4.716s (theta=5.86deg, v=116.27m/s)
+  diff: 17.7%
+  compute_time: 15.3s
+
+P3:
+  effective_time: 5.6600s
+  theta: 3.1247rad (179.03deg)
+  speed: 101.40m/s
+  paper_reference: 5.625s (theta=10.35deg, v=101.80m/s)
+  diff: 0.6%
+  compute_time: 86.6s
+
+P4:
+  effective_time: 7.2286s
+  paper_reference: 12.544s
+  diff: 42.4%
+  compute_time: 131.0s
+  notes: FY3 (x=6000,y=-3000,z=700) had no geometric feasible solution
+
+P5:
+  effective_time: incomplete (joint PSO timeout)
+  stage1_sum: 5.7000s (only FY1 contributed)
+  paper_reference: 17.413s
+  notes: Joint 40D PSO too slow; only FY1 found feasible multi-bomb solution

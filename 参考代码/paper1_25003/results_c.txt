@@ -1,0 +1,30 @@
+===C题 Results (Modified Parameters)===
+
+SMOKE_SINK_SPEED = 2.5 m/s
+DRONE_SPEED = [80.0, 120.0] m/s
+P1: release=1.2s, delay=3.2s
+
+P1:
+  effective_time: 0.0000s
+  compute_time: 0.6s
+  notes: theta=pi puts smoke at y=0; target at y=200 cannot be occluded from this geometry with C题 timing parameters
+
+P2:
+  effective_time: 4.4200s
+  theta: 3.1115rad (178.28deg)
+  speed: 92.34m/s
+  release_time: 0.6818s
+  delay: 3.0176s
+  compute_time: 10.8s
+
+P3:
+  effective_time: 5.5400s
+  theta: 3.1236rad (178.97deg)
+  speed: 80.24m/s
+  compute_time: 66.6s
+
+P4:
+  not computed (timeout)
+
+P5:
+  not computed (timeout)
