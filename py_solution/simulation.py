@@ -188,8 +188,9 @@ def _check_occlusion_batch(M_pos, smoke_pos, target_keypoints, chunk_size=None):
             dot = np.einsum('ti,tki->tk', vec_ms_n, tar_axis)
             norm_tar = np.linalg.norm(tar_axis, axis=2)
             denom = dist_ms_n[:, None] * norm_tar
-            denom_safe = np.where(denom < 1e-12, np.inf, denom)
-            cos_gamma = dot / denom_safe
+            with np.errstate(divide='ignore', invalid='ignore'):
+                cos_gamma = dot / denom
+            # denom≈0→cos_gamma=inf/nan; cos_alpha≤1→比较恒False, 省去np.where拷贝
             all_in_cone[need] = np.all(cos_alpha_n[:, None] <= cos_gamma, axis=1)
 
         cone_ok = full_cover | all_in_cone
@@ -341,18 +342,31 @@ def _multi_cloud_coverage_mask(bombs, missile_idx, target_keypoints, dt, t_total
         need = eligible & (~full_cover)
         in_cone = np.zeros((len(ts), K), dtype=bool)
         if np.any(need):
-            m_n = m[need]
-            vec_ms_n = vec_ms[need]
-            dist_ms_n = dist_ms[need]
-            cos_alpha_n = cos_alpha[need]
+            idx_need = np.nonzero(need)[0]
+            m_n_all = m[need]
+            vec_ms_n_all = vec_ms[need]
+            dist_ms_n_all = dist_ms[need]
+            cos_alpha_n_all = cos_alpha[need]
 
-            tar_axis = target_keypoints[None, :, :] - m_n[:, None, :]
-            dot = np.einsum('ti,tki->tk', vec_ms_n, tar_axis)
-            norm_tar = np.linalg.norm(tar_axis, axis=2)
-            denom = dist_ms_n[:, None] * norm_tar
-            denom_safe = np.where(denom < 1e-12, np.inf, denom)
-            cos_gamma = dot / denom_safe
-            in_cone[need] = cos_alpha_n[:, None] <= cos_gamma
+            # tar_axis 是 (t_n, K, 3) 的大数组，t_n 大 + K 大时能到 GB 量级。
+            # 和 _check_occlusion_batch 一样按行分块，把单块临时数组控制在 ~1e7 元素以内，
+            # 避免多进程并行时每个 worker 各吃 1GB+ 直接把内存撑爆。
+            chunk = max(1, int(1e7 / max(K * 3, 1)))
+            for s in range(0, len(idx_need), chunk):
+                e = min(s + chunk, len(idx_need))
+                m_n = m_n_all[s:e]
+                vec_ms_n = vec_ms_n_all[s:e]
+                dist_ms_n = dist_ms_n_all[s:e]
+                cos_alpha_n = cos_alpha_n_all[s:e]
+
+                tar_axis = target_keypoints[None, :, :] - m_n[:, None, :]
+                dot = np.einsum('ti,tki->tk', vec_ms_n, tar_axis)
+                norm_tar = np.linalg.norm(tar_axis, axis=2)
+                denom = dist_ms_n[:, None] * norm_tar
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    cos_gamma = dot / denom
+                # denom≈0→cos_gamma=inf/nan; cos_alpha≤1→比较恒False, 省去np.where拷贝
+                in_cone[idx_need[s:e]] = cos_alpha_n[:, None] <= cos_gamma
 
         in_cone |= (eligible & full_cover)[:, None]
 
@@ -396,7 +410,8 @@ def simulate_multi_bomb_single_drone(drone_init, theta, speed, release_times, de
     return any_covered.sum() * dt
 
 
-def simulate_multi_drone_multi_bomb(drone_params_list, dt=DT, t_total=T_TOTAL):
+def simulate_multi_drone_multi_bomb(drone_params_list, dt=DT, t_total=T_TOTAL,
+                                    target_keypoints=None):
     """
     仿真多机多弹多导弹场景
 
@@ -415,7 +430,8 @@ def simulate_multi_drone_multi_bomb(drone_params_list, dt=DT, t_total=T_TOTAL):
         total_effective_time: 总有效遮蔽时长（同一导弹上的所有云团按"互补遮蔽"判定，再对三枚导弹求和）
         per_missile_time: 每枚导弹的遮蔽时长
     """
-    target_keypoints = get_target_keypoints(n_circle=360, n_layers=10)
+    if target_keypoints is None:
+        target_keypoints = get_target_keypoints(n_circle=360, n_layers=10)
 
     n_steps = int(np.ceil(t_total / dt))
     n_missiles = 3

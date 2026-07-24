@@ -10,14 +10,17 @@ import openpyxl
 from config import (
     DRONES_INIT, DRONE_SPEED_MIN, DRONE_SPEED_MAX,
     BOMB_INTERVAL_MIN, DT, T_TOTAL,
+    SEARCH_N_CIRCLE, SEARCH_N_LAYERS, SEARCH_DT,
+    FINAL_N_CIRCLE, FINAL_N_LAYERS, FINAL_DT,
 )
 from simulation import simulate_multi_bomb_single_drone, get_target_keypoints
 from pso import PSO, local_polish
 from problem2 import Problem2Objective
 
 # 为 problem3 使用独立的 PSO 参数
-PSO_SWARM_SIZE_P3 = 300
-PSO_MAX_ITER_P3 = 150
+# (预算已按搜索档实测吞吐重定：搜索档单次评估约0.02s/10进程，150×100约5~6分钟)
+PSO_SWARM_SIZE_P3 = 150
+PSO_MAX_ITER_P3 = 100
 
 # 阶段0(热启动预搜)的PSO参数，问题规模小(单弹4维)，预算给小一些即可
 PSO_SWARM_SIZE_P3_SEED = 100
@@ -27,9 +30,10 @@ PSO_MAX_ITER_P3_SEED = 40
 class Problem3Objective:
     """模块级可pickle的目标函数对象，供PSO多进程worker调用"""
 
-    def __init__(self, drone_init, target_keypoints):
+    def __init__(self, drone_init, target_keypoints, dt=SEARCH_DT):
         self.drone_init = drone_init
         self.target_keypoints = target_keypoints
+        self.dt = dt
 
     def __call__(self, x):
         theta = x[0]
@@ -44,7 +48,7 @@ class Problem3Objective:
 
         return simulate_multi_bomb_single_drone(
             self.drone_init, theta, speed, release_times, detonation_delays,
-            missile_indices, target_keypoints=self.target_keypoints, dt=DT, t_total=T_TOTAL
+            missile_indices, target_keypoints=self.target_keypoints, dt=self.dt, t_total=T_TOTAL
         )
 
 
@@ -55,7 +59,7 @@ def solve_problem3():
     print("=" * 60)
 
     drone_init = DRONES_INIT[0]  # FY1
-    target_keypoints = get_target_keypoints(360, 10)
+    target_keypoints = get_target_keypoints(SEARCH_N_CIRCLE, SEARCH_N_LAYERS)  # 搜索档
 
     # 决策变量(8维):
     # x[0] = theta, x[1] = speed
@@ -78,8 +82,8 @@ def solve_problem3():
     # PSO在其附近精修"的思路，而不是让PSO从纯随机初始化的8维空间里摸索。
     # ============================================================
     print("\n阶段0: 单弹快速预搜(为8维PSO提供热启动起点)...")
-    seed_kp = get_target_keypoints(360, 0)  # 用问题2同档精度(无侧面点)，预搜更快
-    seed_obj = Problem2Objective(drone_init, seed_kp)
+    seed_kp = get_target_keypoints(SEARCH_N_CIRCLE, 0)  # 单弹预搜用无侧面点的搜索档，更快
+    seed_obj = Problem2Objective(drone_init, seed_kp, dt=SEARCH_DT)
     seed_bounds = [bounds[0], bounds[1], (0.0, 5.0), (0.0, 6.0)]
     seed_pso = PSO(seed_obj, seed_bounds, n_particles=PSO_SWARM_SIZE_P3_SEED,
                    max_iter=PSO_MAX_ITER_P3_SEED, maximize=True, verbose=False)
@@ -130,6 +134,17 @@ def solve_problem3():
         x_opt, f_opt = x_polished, f_polished
     else:
         print(f"  精修没有提升({f_polished:.4f}s <= {f_opt:.4f}s)，保留PSO原结果")
+
+    # 定稿档复算：搜索用180关键点/dt0.01，最优解定下来后用360关键点/dt0.005复算上报
+    theta_f, speed_f = x_opt[0], x_opt[1]
+    rt_f = np.array([x_opt[2], x_opt[2] + x_opt[3], x_opt[2] + x_opt[3] + x_opt[4]])
+    dd_f = np.array([x_opt[5], x_opt[6], x_opt[7]])
+    final_kp = get_target_keypoints(FINAL_N_CIRCLE, FINAL_N_LAYERS)
+    f_final = simulate_multi_bomb_single_drone(
+        drone_init, theta_f, speed_f, rt_f, dd_f, np.array([0, 0, 0]),
+        target_keypoints=final_kp, dt=FINAL_DT, t_total=T_TOTAL)
+    print(f"  定稿档复算(360关键点/dt{FINAL_DT}): {f_opt:.4f}s(搜索档) -> {f_final:.4f}s(定稿)")
+    f_opt = f_final
 
     # 解析结果
     theta = x_opt[0]

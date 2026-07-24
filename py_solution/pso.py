@@ -4,7 +4,7 @@
 import os
 import numpy as np
 import multiprocessing as mp
-from config import PSO_SWARM_SIZE, PSO_MAX_ITER, PSO_W, PSO_C1, PSO_C2
+from config import PSO_SWARM_SIZE, PSO_MAX_ITER, PSO_W, PSO_C1, PSO_C2, PSO_MAX_WORKERS
 
 
 # 子进程worker用的模块级状态：Pool的initializer只在每个worker进程启动时跑一次，
@@ -12,10 +12,75 @@ from config import PSO_SWARM_SIZE, PSO_MAX_ITER, PSO_W, PSO_C1, PSO_C2
 # objective_func(包括它内部可能带的关键点数组等数据)。
 _worker_objective = None
 
+# 限制每个worker进程里numpy底层BLAS的线程数为1。否则 N个进程 × 每进程又开M个BLAS线程
+# = N×M 个线程争抢CPU(超额订阅)，CPU打满但吞吐反而下降。并行靠的是进程级并行，
+# 单个评估本身不需要BLAS多线程。
+_THREAD_ENV_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+
 
 def _pool_init(objective_func):
     global _worker_objective
+    for _v in _THREAD_ENV_VARS:
+        os.environ[_v] = "1"
     _worker_objective = objective_func
+
+
+def _available_memory_gb():
+    """尽量拿到当前可用物理内存(GB)。Windows用GlobalMemoryStatusEx，拿不到就返回None。"""
+    try:
+        import ctypes
+
+        class _MEMSTAT(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong),
+                        ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong),
+                        ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong),
+                        ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong),
+                        ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        m = _MEMSTAT()
+        m.dwLength = ctypes.sizeof(_MEMSTAT)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+            return m.ullAvailPhys / 1e9
+    except Exception:
+        pass
+    return None
+
+
+# 单个worker评估烟幕遮蔽时的峰值内存经验值(GB)：spawn出的Python+numpy底座约0.15GB，
+# 加上分块后的临时数组约0.3~0.4GB，留些余量按0.7GB估。
+_PER_WORKER_GB = 0.7
+
+
+def _resolve_workers(requested):
+    """把 n_workers 请求解析成实际进程数：
+    上限 = min(CPU核数, config.PSO_MAX_WORKERS 或环境变量 CUMCM_PSO_WORKERS,
+              按当前可用内存能容纳的进程数)。
+    可用内存拿不到时退回固定上限。内存波动大(实测10~20GB来回)，所以每次都现算。"""
+    cap = PSO_MAX_WORKERS
+    env_cap = os.environ.get("CUMCM_PSO_WORKERS")
+    if env_cap:
+        try:
+            cap = max(1, int(env_cap))
+        except ValueError:
+            pass
+
+    avail = _available_memory_gb()
+    if avail is not None:
+        # 只用可用内存的一半来开进程，给主进程/其它程序/系统留足余量
+        mem_cap = max(1, int((avail * 0.5) / _PER_WORKER_GB))
+        cap = min(cap, mem_cap)
+
+    if requested == 'auto':
+        n = min(os.cpu_count() or 1, cap)
+    else:
+        n = min(int(requested), cap)
+    return max(1, n)
+
 
 
 def _pool_eval(x):
@@ -64,8 +129,8 @@ class PSO:
         self.ub = self.bounds[:, 1]
 
         if n_workers == 'auto':
-            n_workers = os.cpu_count() or 1
-        self.n_workers = max(1, int(n_workers))
+            n_workers = _resolve_workers('auto')
+        self.n_workers = _resolve_workers(n_workers)
 
         # 状态
         self.best_position = None

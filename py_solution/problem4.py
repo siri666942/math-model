@@ -22,19 +22,25 @@ import numpy as np
 import openpyxl
 from config import (
     DRONES_INIT, DRONE_SPEED_MIN, DRONE_SPEED_MAX, DT, T_TOTAL,
+    SEARCH_N_CIRCLE, SEARCH_N_LAYERS, SEARCH_DT,
+    FINAL_N_CIRCLE, FINAL_N_LAYERS, FINAL_DT,
 )
 from simulation import simulate_multi_drone_multi_bomb, get_target_keypoints
 from pso import PSO, local_polish
 from final_solve import search_best_detonation
 
+# 搜索档/定稿档关键点(模块级预生成，可被objective对象引用并pickle给worker)
+_SEARCH_KP = get_target_keypoints(SEARCH_N_CIRCLE, SEARCH_N_LAYERS)
+_FINAL_KP = get_target_keypoints(FINAL_N_CIRCLE, FINAL_N_LAYERS)
+
 # 阶段1兜底用: 如果三维空间采样也没找到可行解，才退回猜角度窗口的PSO再试一次
 PSO_SWARM_P4_STAGE1_FALLBACK = 150
 PSO_ITER_P4_STAGE1_FALLBACK = 60
-STAGE1_N_FAST = 20000  # search_best_detonation 阶段1的采样点数
+STAGE1_N_FAST = 8000  # search_best_detonation 阶段1的采样点数(原20000，按时间预算下调)
 
-# 阶段2: 12维联合精修的PSO参数(搜索范围已经收窄，不需要跟冷启动时一样大的预算)
-PSO_SWARM_P4_STAGE2 = 200
-PSO_ITER_P4_STAGE2 = 100
+# 阶段2: 12维联合精修的PSO参数(搜索范围已经收窄，配合搜索档，约8~11分钟)
+PSO_SWARM_P4_STAGE2 = 120
+PSO_ITER_P4_STAGE2 = 70
 
 # 各无人机朝向真目标(0,200,0)的方位角窗口——只用于阶段1兜底PSO的搜索范围，
 # 正常路径下阶段1走search_best_detonation(三维空间采样反解方向)，不依赖这个猜测窗口。
@@ -73,7 +79,7 @@ class Problem4Objective:
             })
 
         total_time, per_missile = simulate_multi_drone_multi_bomb(
-            drone_params, dt=DT, t_total=T_TOTAL
+            drone_params, dt=SEARCH_DT, t_total=T_TOTAL, target_keypoints=_SEARCH_KP
         )
         return total_time
 
@@ -95,7 +101,7 @@ class Stage1DroneObjective:
             'missile_indices': [0],
         }]
         total_time, _ = simulate_multi_drone_multi_bomb(
-            drone_params, dt=DT, t_total=T_TOTAL
+            drone_params, dt=SEARCH_DT, t_total=T_TOTAL, target_keypoints=_SEARCH_KP
         )
         return total_time
 
@@ -189,6 +195,23 @@ def solve_problem4():
         x_opt, f_opt = x_polished, f_polished
     else:
         print(f"  精修没有提升({f_polished:.4f}s <= {f_opt:.4f}s)，保留PSO原结果")
+
+    # 定稿档复算：搜索用180关键点/dt0.01，最优解用360关键点/dt0.005复算上报
+    def _eval_final(x):
+        dp = []
+        for i in range(N_DRONES):
+            dp.append({
+                'drone_init': DRONES_INIT[i], 'theta': x[i], 'speed': x[3 + i],
+                'release_times': np.array([x[6 + i]]),
+                'detonation_delays': np.array([x[9 + i]]),
+                'missile_indices': [0],
+            })
+        tt, _ = simulate_multi_drone_multi_bomb(dp, dt=FINAL_DT, t_total=T_TOTAL,
+                                                target_keypoints=_FINAL_KP)
+        return tt
+    f_final = _eval_final(x_opt)
+    print(f"  定稿档复算(360关键点/dt{FINAL_DT}): {f_opt:.4f}s(搜索档) -> {f_final:.4f}s(定稿)")
+    f_opt = f_final
 
     # 解析结果
     theta = x_opt[0:3]
