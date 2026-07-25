@@ -468,29 +468,41 @@ def fig_pso_convergence():
 
 # ============================================================
 # 图9 关键点采样数目收敛性
+# 对比"远离视锥边界"与"贴近视锥边界"两种策略的 n_c 敏感性，
+# 暴露 n_c 仅在后者上影响判据的精度下限。
 # ============================================================
 def fig_keypoint_convergence():
-    theta = np.radians(178.2); v = 83.8
-    tr = 0.30; td = 2.91
     drone_init = cfg.DRONES_INIT[0]
-    n_c_list = [10, 20, 36, 50, 72, 100, 144, 180, 240, 360, 540, 720]
-    vals = []
+    n_c_list = [4, 8, 12, 20, 30, 48, 72, 120, 200, 360, 540, 720]
+    # 策略A：最优（远离视锥边界）
+    theta_a, v_a, tr_a, td_a = np.radians(178.2), 83.8, 0.30, 2.91
+    vals_a = []
+    # 策略B：贴近视锥边界（theta 偏 0.2°）
+    theta_b, v_b, tr_b, td_b = np.radians(178.0), 83.8, 0.30, 2.91
+    vals_b = []
     for n_c in n_c_list:
         kp = get_target_keypoints(n_c, max(1, n_c//36))
-        T = simulate_single_bomb(drone_init, theta, v, tr, td, 0, kp, 0.01, 30.0)
-        vals.append(T)
+        T_a = simulate_single_bomb(drone_init, theta_a, v_a, tr_a, td_a, 0, kp, 0.01, 30.0)
+        T_b = simulate_single_bomb(drone_init, theta_b, v_b, tr_b, td_b, 0, kp, 0.01, 30.0)
+        vals_a.append(T_a); vals_b.append(T_b)
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(n_c_list, vals, "o-", color=C_DRONE, linewidth=1.4, markersize=6)
-    ax.axvline(100, color=C_ACCENT, linewidth=0.8, linestyle="--", alpha=0.7, label="n_c=100 参考线")
-    ax.set_xlabel("每圆周采样点数 n_c"); ax.set_ylabel("有效遮蔽时长 T_eff (s)")
-    ax.set_title("关键点采样数目对遮蔽时长的收敛性（问题2）", fontsize=11)
-    ax.legend(frameon=False, fontsize=9)
-    ax.grid(True, alpha=0.3)
+    ax.plot(n_c_list, vals_a, "o-", color=C_DRONE, linewidth=1.4, markersize=6,
+            label="策略A: 最优 (θ=178.2°，远离视锥边界)")
+    ax.plot(n_c_list, vals_b, "s-", color=C_ACCENT, linewidth=1.4, markersize=6,
+            label="策略B: 边界 (θ=178.0°，贴近视锥边界)")
+    ax.axvline(36, color="#888888", linewidth=0.8, linestyle="--", alpha=0.7,
+               label="n_c=36 阈值参考线")
+    ax.set_xscale("log")
+    ax.set_xlabel("每圆周采样点数 $n_c$ (log)")
+    ax.set_ylabel("有效遮蔽时长 $T_{eff}$ (s)")
+    ax.set_title("关键点采样数目对遮蔽时长的影响（问题 2）", fontsize=11)
+    ax.legend(frameon=False, fontsize=8, loc="lower right")
+    ax.grid(True, alpha=0.3, which="both")
     fig.tight_layout()
     fig.savefig(out_path("paper_fig_9_kp_convergence.png"), dpi=180)
     plt.close(fig)
     print("  fig_keypoint_convergence OK")
-    return list(zip(n_c_list, vals))
+    return list(zip(n_c_list, vals_a)), list(zip(n_c_list, vals_b))
 
 
 # ============================================================
@@ -517,6 +529,39 @@ def fig_dt_convergence():
     plt.close(fig)
     print("  fig_dt_convergence OK")
     return list(zip(dt_list, vals))
+
+
+# ============================================================
+# 图10b 侧面层数 n_l 收敛性（验证 n_l 不影响 T_eff）
+# ============================================================
+def fig_nl_convergence():
+    """n_l 扫描：对最优策略与两个边界策略，固定 n_c=180、扫描 n_l"""
+    drone_init = cfg.DRONES_INIT[0]
+    n_l_list = [0, 1, 2, 3, 5, 7, 10, 15, 20]
+    curves = {}
+    for label, theta_deg in [("A: θ=178.2° (最优)", 178.2),
+                              ("B: θ=178.0° (边界)", 178.0),
+                              ("C: θ=178.5° (边界)", 178.5)]:
+        vals = []
+        for n_l in n_l_list:
+            kp = get_target_keypoints(180, n_l)
+            T = simulate_single_bomb(drone_init, np.radians(theta_deg), 83.8, 0.30, 2.91, 0, kp, 0.01, 30.0)
+            vals.append(T)
+        curves[label] = vals
+    fig, ax = plt.subplots(figsize=(7, 4))
+    colors = [C_DRONE, C_ACCENT, "#117A65"]
+    for (label, vals), col in zip(curves.items(), colors):
+        ax.plot(n_l_list, vals, "o-", color=col, linewidth=1.4, markersize=6, label=label)
+    ax.set_xlabel("侧面层数 $n_l$ (固定 $n_c=180$)")
+    ax.set_ylabel("有效遮蔽时长 $T_{eff}$ (s)")
+    ax.set_title("侧面层数 $n_l$ 对有效遮蔽时长的影响（问题 2）", fontsize=11)
+    ax.legend(frameon=False, fontsize=9)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path("paper_fig_10b_nl_convergence.png"), dpi=180)
+    plt.close(fig)
+    print("  fig_nl_convergence OK")
+    return curves
 
 
 # ============================================================
@@ -860,6 +905,7 @@ if __name__ == "__main__":
     fig_pso_convergence()
     fig_keypoint_convergence()
     fig_dt_convergence()
+    fig_nl_convergence()
     fig_sink_speed()
     fig_drone_speed()
     fig_p4_strategy()
