@@ -1,5 +1,5 @@
 """
-论文配图批量生成脚本（自己跑，不要学长原图）
+论文配图批量生成脚本
 
 输出：paper_assets/generated/paper_fig_*.png
 """
@@ -490,6 +490,7 @@ def fig_keypoint_convergence():
     fig.savefig(out_path("paper_fig_9_kp_convergence.png"), dpi=180)
     plt.close(fig)
     print("  fig_keypoint_convergence OK")
+    return list(zip(n_c_list, vals))
 
 
 # ============================================================
@@ -515,6 +516,7 @@ def fig_dt_convergence():
     fig.savefig(out_path("paper_fig_10_dt_convergence.png"), dpi=180)
     plt.close(fig)
     print("  fig_dt_convergence OK")
+    return list(zip(dt_list, vals))
 
 
 # ============================================================
@@ -535,8 +537,8 @@ def fig_sink_speed():
         cfg.SMOKE_SINK_SPEED = old
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.plot(vs_list, vals, "o-", color=C_DRONE, linewidth=1.4, markersize=6)
-    ax.axvline(2.5, color=C_ACCENT, linewidth=0.8, linestyle="--", alpha=0.7, label="C题 v_s=2.5")
-    ax.axvline(3.0, color="#888888", linewidth=0.8, linestyle="--", alpha=0.7, label="原A题 v_s=3.0")
+    ax.axvline(2.5, color=C_ACCENT, linewidth=0.8, linestyle="--", alpha=0.7, label="本题 v_s=2.5")
+    ax.axvline(3.0, color="#888888", linewidth=0.8, linestyle="--", alpha=0.7, label="对照 v_s=3.0")
     ax.set_xlabel("云团下沉速度 v_s (m/s)"); ax.set_ylabel("有效遮蔽时长 T_eff (s)")
     ax.set_title("云团下沉速度对遮蔽时长的影响（问题2）", fontsize=11)
     ax.legend(frameon=False, fontsize=9)
@@ -545,33 +547,167 @@ def fig_sink_speed():
     fig.savefig(out_path("paper_fig_11_sink_speed.png"), dpi=180)
     plt.close(fig)
     print("  fig_sink_speed OK")
+    return list(zip(vs_list, vals))
 
 
 # ============================================================
 # 图12 无人机速度上限影响
 # ============================================================
 def fig_drone_speed():
+    """无人机速度上限敏感性：每个 v_max 下若原始最优 v=83.8 ≤ v_max 则保持 v=83.8，
+    否则取 v=v_max 并扫描；展示"上限收窄"对最优解的影响。"""
     theta = np.radians(178.2)
     tr = 0.30; td = 2.91
     drone_init = cfg.DRONES_INIT[0]
     kp = get_target_keypoints(180, 5)
-    vmax_list = [100, 110, 120, 130, 140, 150]
+    v_opt = 83.8  # 问题2原始最优速度
+    vmax_list = [85, 90, 100, 110, 120, 130, 140, 150]
     vals = []
     for vmax in vmax_list:
-        T = simulate_single_bomb(drone_init, theta, vmax-5, tr, td, 0, kp, 0.01, 30.0)
+        v_use = min(v_opt, vmax)
+        T = simulate_single_bomb(drone_init, theta, v_use, tr, td, 0, kp, 0.01, 30.0)
         vals.append(T)
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.plot(vmax_list, vals, "o-", color=C_DRONE, linewidth=1.4, markersize=6)
-    ax.axvline(120, color=C_ACCENT, linewidth=0.8, linestyle="--", alpha=0.7, label="C题 v_max=120")
-    ax.axvline(140, color="#888888", linewidth=0.8, linestyle="--", alpha=0.7, label="原A题 v_max=140")
+    ax.axvline(120, color=C_ACCENT, linewidth=0.8, linestyle="--", alpha=0.7, label="本题 v_max=120")
     ax.set_xlabel("无人机速度上限 v_max (m/s)"); ax.set_ylabel("有效遮蔽时长 T_eff (s)")
-    ax.set_title("无人机速度上限对遮蔽时长的影响（问题2, v=v_max-5）", fontsize=11)
+    ax.set_title("无人机速度上限对遮蔽时长的影响（问题2, v=min(83.8, v_max)）", fontsize=11)
     ax.legend(frameon=False, fontsize=9)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(out_path("paper_fig_12_drone_speed.png"), dpi=180)
     plt.close(fig)
     print("  fig_drone_speed OK")
+    return list(zip(vmax_list, vals))
+
+
+# ============================================================
+# 图A1 投放时刻敏感性（问题2最优解附近扰动）
+# ============================================================
+def fig_release_time():
+    theta = np.radians(178.2); v = 83.8; td = 2.91
+    drone_init = cfg.DRONES_INIT[0]
+    kp = get_target_keypoints(180, 5)
+    tr_list = [0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.80, 1.00, 1.50]
+    vals = []
+    for tr in tr_list:
+        T = simulate_single_bomb(drone_init, theta, v, tr, td, 0, kp, 0.01, 30.0)
+        vals.append(T)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(tr_list, vals, "o-", color=C_DRONE, linewidth=1.4, markersize=6)
+    ax.axvline(0.30, color=C_ACCENT, linewidth=0.8, linestyle="--", alpha=0.7, label="最优 tr=0.30 s")
+    ax.set_xlabel("投放时刻 $t_r$ (s)")
+    ax.set_ylabel("有效遮蔽时长 $T_{eff}$ (s)")
+    ax.set_title("投放时刻 $t_r$ 对有效遮蔽时长的影响（问题2）", fontsize=11)
+    ax.legend(frameon=False, fontsize=9)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path("paper_fig_a1_release_time.png"), dpi=180)
+    plt.close(fig)
+    print("  fig_release_time OK")
+    return list(zip(tr_list, vals))
+
+
+# ============================================================
+# 图A2 起爆延时敏感性（问题2最优解附近扰动）
+# ============================================================
+def fig_detonation_delay():
+    theta = np.radians(178.2); v = 83.8; tr = 0.30
+    drone_init = cfg.DRONES_INIT[0]
+    kp = get_target_keypoints(180, 5)
+    td_list = [1.5, 2.0, 2.5, 2.8, 2.91, 3.0, 3.2, 3.5, 4.0, 5.0]
+    vals = []
+    for td in td_list:
+        T = simulate_single_bomb(drone_init, theta, v, tr, td, 0, kp, 0.01, 30.0)
+        vals.append(T)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(td_list, vals, "s-", color=C_DRONE, linewidth=1.4, markersize=6)
+    ax.axvline(2.91, color=C_ACCENT, linewidth=0.8, linestyle="--", alpha=0.7, label="最优 td=2.91 s")
+    ax.set_xlabel("起爆延时 $t_d$ (s)")
+    ax.set_ylabel("有效遮蔽时长 $T_{eff}$ (s)")
+    ax.set_title("起爆延时 $t_d$ 对有效遮蔽时长的影响（问题2）", fontsize=11)
+    ax.legend(frameon=False, fontsize=9)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path("paper_fig_a2_detonation_delay.png"), dpi=180)
+    plt.close(fig)
+    print("  fig_detonation_delay OK")
+    return list(zip(td_list, vals))
+
+
+# ============================================================
+# 图A3 算法稳定性：问题2 上重复运行 PSO 多次
+# ============================================================
+def fig_algorithm_stability():
+    from pso import PSO
+    from problem2 import Problem2Objective
+    kp = get_target_keypoints(180, 5)
+    obj = Problem2Objective(cfg.DRONES_INIT[0], kp, dt=cfg.SEARCH_DT)
+    bounds = [(2.73, 3.53), (cfg.DRONE_SPEED_MIN, cfg.DRONE_SPEED_MAX),
+              (0.0, 15.0), (0.0, 6.0)]
+    n_runs = 8
+    finals = []
+    for run_id in range(n_runs):
+        np.random.seed(run_id * 17 + 1)  # 主进程内确定性
+        pso = PSO(obj, bounds, n_particles=80, max_iter=60, maximize=True,
+                  verbose=False, n_workers=1)  # 单进程让 seed 可控
+        _, f_opt = pso.optimize()
+        finals.append(f_opt)
+    fig, ax = plt.subplots(figsize=(6.5, 4))
+    ax.bar(range(1, n_runs+1), finals, color=C_DRONE, alpha=0.75, edgecolor='black', linewidth=0.4)
+    ax.axhline(np.mean(finals), color=C_ACCENT, linewidth=1.0, linestyle="--",
+               label=f"均值 {np.mean(finals):.3f} s")
+    ax.axhline(np.max(finals), color=C_OK, linewidth=1.0, linestyle=":",
+               label=f"最大值 {np.max(finals):.3f} s")
+    ax.set_xlabel("运行序号 (不同随机种子)")
+    ax.set_ylabel("最优 $T_{eff}$ (s)")
+    ax.set_title(f"PSO 在问题 2 上的稳定性（{n_runs} 次独立运行）", fontsize=11)
+    ax.legend(frameon=False, fontsize=9)
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.set_ylim(min(finals) - 0.05, max(finals) + 0.05)
+    fig.tight_layout()
+    fig.savefig(out_path("paper_fig_a3_pso_stability.png"), dpi=180)
+    plt.close(fig)
+    print("  fig_algorithm_stability OK")
+    return finals
+
+
+# ============================================================
+# 图A4 三种算法收敛曲线对比（PSO/GA/SA 在问题2 上同条件实测）
+# ============================================================
+def fig_algo_comparison():
+    """同条件同评估预算下 PSO / GA / SA 收敛曲线"""
+    from pso import PSO
+    from problem2 import Problem2Objective
+    from ga_sa_baselines import run_ga, run_sa
+    kp = get_target_keypoints(180, 5)
+    obj = Problem2Objective(cfg.DRONES_INIT[0], kp, dt=cfg.SEARCH_DT)
+    bounds = [(2.73, 3.53), (cfg.DRONE_SPEED_MIN, cfg.DRONE_SPEED_MAX),
+              (0.0, 15.0), (0.0, 6.0)]
+    n_eval_budget = 6000  # 公平对比：每个算法最多 6000 次评估
+    # PSO: 80 粒子 × 75 代 ≈ 6000
+    np.random.seed(42)
+    pso = PSO(obj, bounds, n_particles=80, max_iter=75, maximize=True,
+              verbose=False, n_workers=1)
+    _ = pso.optimize()
+    pso_curve = [-h for h in pso.history]
+    # GA / SA 用统一的评估预算
+    ga_curve = run_ga(obj, bounds, n_eval_budget=n_eval_budget, seed=42)
+    sa_curve = run_sa(obj, bounds, n_eval_budget=n_eval_budget, seed=42)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(np.arange(len(pso_curve))*80, pso_curve, color=C_DRONE, linewidth=1.4, label="PSO")
+    ax.plot(np.arange(len(ga_curve)), ga_curve, color=C_ACCENT, linewidth=1.4, label="GA (实数编码)")
+    ax.plot(np.arange(len(sa_curve)), sa_curve, color="#117A65", linewidth=1.4, label="SA (指数降温)")
+    ax.set_xlabel("函数评估次数")
+    ax.set_ylabel("当前最优 $T_{eff}$ (s)")
+    ax.set_title("PSO / GA / SA 在问题 2 上的收敛曲线（相同评估预算 6000 次）", fontsize=11)
+    ax.legend(frameon=False, fontsize=9)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path("paper_fig_a4_algo_compare.png"), dpi=180)
+    plt.close(fig)
+    print("  fig_algo_comparison OK")
+    return {"pso": pso_curve[-1], "ga": ga_curve[-1], "sa": sa_curve[-1]}
 
 
 # ============================================================
@@ -728,4 +864,12 @@ if __name__ == "__main__":
     fig_drone_speed()
     fig_p4_strategy()
     fig_p5_strategy()
+    # 敏感性增强章节新增图
+    data_kp = fig_release_time()
+    data_td = fig_detonation_delay()
+    finals = fig_algorithm_stability()
+    compare = fig_algo_comparison()
+    print("---")
+    print(f"PSO 稳定性: mean={np.mean(finals):.4f} std={np.std(finals):.4f} max={np.max(finals):.4f}")
+    print(f"算法对比(同等预算6000次评估): PSO={compare['pso']:.3f} GA={compare['ga']:.3f} SA={compare['sa']:.3f}")
     print("=== 全部完成 ===")

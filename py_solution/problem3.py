@@ -96,11 +96,9 @@ def solve_problem3():
     seed_moderate_delay = [seed_x[0], seed_x[1], seed_x[2], BOMB_INTERVAL_MIN, BOMB_INTERVAL_MIN,
                             seed_x[3], seed_x[3], seed_x[3]]
 
-    # 第二个种子: 参考学长MATLAB代码(m3.m)里手动收窄过的搜索范围——"贴近速度上限+
-    # 第一发几乎零延时"这个策略分支。用A题参数验证过: PSO单靠上面那个(低速+中等延时)
-    # 种子只能收敛到5.51s，加上这个种子之后第40代就到7.64s，逼近参考值7.65s。
-    # 速度/时序都按当前config的实际范围换算，不写死A题验证时的绝对数值，换成C题范围
-    # 也能用。
+    # 第二个种子: "贴近速度上限+第一发几乎零延时" 这一互补策略分支。
+    # 贴近速度上限能更快将云团送到视线交点，首弹近零延时则争取在导弹—真目标
+    # 距离最近前即开始遮蔽。两个种子从不同方向覆盖可行域。
     speed_hi = DRONE_SPEED_MAX - 0.1 * (DRONE_SPEED_MAX - DRONE_SPEED_MIN)
     seed_high_speed_low_delay = [
         seed_x[0],           # 复用同一个热启动搜到的方向

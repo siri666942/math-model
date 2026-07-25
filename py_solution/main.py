@@ -100,16 +100,15 @@ def main():
     selected = parse_selection(sys.argv[1:])
 
     print("=" * 70)
-    print("   C题 烟幕干扰弹的投放策略 - Python求解")
-    print("   基于2025年A题解法，使用moni2026 C题参数")
+    print("   烟幕干扰弹的投放策略 - Python求解")
     print(f"   本次运行问题: {selected}")
     print("=" * 70)
     print()
-    print("关键参数差异 (C题 vs A题):")
-    print("  烟幕云团下沉速度: 2.5 m/s (原 3.0 m/s)")
-    print("  无人机速度范围: 80~120 m/s (原 70~140 m/s)")
-    print("  问题1投放时间: 1.2 s (原 1.5 s)")
-    print("  问题1起爆延时: 3.2 s (原 3.6 s)")
+    print("主要参数:")
+    print("  烟幕云团下沉速度: 2.5 m/s")
+    print("  无人机速度范围: 80~120 m/s")
+    print("  问题1投放时间: 1.2 s")
+    print("  问题1起爆延时: 3.2 s")
     print()
 
     results = {}
@@ -135,13 +134,7 @@ def main():
     print("=" * 70)
 
     if selected == [1, 2, 3, 4, 5]:
-        print("\n参考值 (2025年A题原参数):")
-        print("  问题1: 1.3915 s (原参数: 延时1.5/3.6s)")
-        print("  问题2: 4.5960 s")
-        print("  问题3: 7.6500 s")
-        print("  问题4: 11.7540 s")
-        print("  问题5: 38.0600 s")
-        print("  (C题参数下沉速度更慢2.5 vs 3.0m/s，遮蔽时间可能略长)")
+        pass
 
 
 if __name__ == "__main__":
